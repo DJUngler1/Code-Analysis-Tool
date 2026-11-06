@@ -1,0 +1,46 @@
+# Code-Analysis-Tool – Docker deployment
+#
+# Usage (from the repository root):
+#   cp docker/.env.example docker/.env      # then set PROJECTS_DIR
+#   docker compose -f docker/docker-compose.yml build
+#   docker compose -f docker/docker-compose.yml run --rm scheduler
+#
+# Use `run`, not `up`: the scheduler asks for the project path interactively,
+# which needs an attached terminal.
+
+name: code-analysis
+
+services:
+  scheduler:
+    build:
+      context: ..
+      dockerfile: docker/scheduler/Dockerfile
+    image: code-analysis/scheduler:latest
+    stdin_open: true
+    tty: true
+    # Files written into the project (formatter step) keep the host user as
+    # owner on Linux. Docker Desktop (macOS/Windows) maps ownership itself.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      PROJECTS_DIR: ${PROJECTS_DIR}
+      HOST_HOME: ${HOME}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    volumes:
+      # Mounted read-write at the same absolute path as on the host, so host
+      # paths can be pasted unchanged at the prompt.
+      - type: bind
+        source: ${PROJECTS_DIR:?Set PROJECTS_DIR in docker/.env (see docker/.env.example)}
+        target: ${PROJECTS_DIR}
+    extra_hosts:
+      # Docker Desktop already provides host.docker.internal; this entry makes
+      # it point to the host on Linux as well (used to reach Ollama).
+      - "host.docker.internal:host-gateway"
+    networks:
+      - analysis-net
+
+networks:
+  # Shared network for the scheduler and the analysis tool containers
+  # (OpenGrep, SonarQube, OSV-Scanner, ...) added in later steps.
+  analysis-net:
+    name: code-analysis-net
+    driver: bridge

@@ -1,0 +1,7 @@
+# Build context is the repository root; only the scheduler sources are needed.
+*
+!scheduler
+scheduler/.venv
+scheduler/tests
+**/__pycache__
+**/*.egg-info

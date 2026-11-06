@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Tool Workflow</title>
+<style>
+/* ---- Farben & Grundwerte (hier zentral anpassbar) ---- */
+.tp {
+  --tp-bg: #1A1A19;
+  --tp-text: #ECEAE3;  --tp-muted: #A8A69C;  --tp-hint: #77756E;
+  --tp-card: #232321;  --tp-box: #2E2E2B;    --tp-border: #3A3A37;  --tp-border-strong: #4A4945;
+  --tp-dec-bg: #3A2A10; --tp-dec-border: #BA7517; --tp-dec-text: #FAC775;
+  --tp-abort-bg: #3D1616; --tp-abort-border: #E24B4A; --tp-abort-text: #F7C1C1;
+  --tp-llm-bg: #222040; --tp-llm-border: #534AB7; --tp-llm-text: #CECBF6;
+  display: flex; flex-direction: column; gap: 0; max-width: 760px; margin: 1.5rem auto;
+  background: var(--tp-bg); padding: 18px; border-radius: 16px;
+  font-size: 13px; line-height: 1.4; color: var(--tp-text);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+.tp * { box-sizing: border-box; }
+.tp p { margin: 0; }
+.tp-ph { border: 0.5px solid var(--tp-border); border-radius: 12px; padding: 12px 14px; background: var(--tp-card); }
+.tp-ph.llm { background: var(--tp-llm-bg); border-color: var(--tp-llm-border); }
+.tp-pt { font-size: 12px; font-weight: 600; letter-spacing: .01em; color: var(--tp-muted); margin: 0 0 8px !important; display: flex; align-items: center; gap: 6px; }
+.tp-ph.llm .tp-pt { color: var(--tp-llm-text); }
+.tp-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; align-items: start; }
+.tp-n { border: 0.5px solid var(--tp-border-strong); border-radius: 8px; padding: 8px 10px; background: var(--tp-box); }
+.tp-n b { font-weight: 600; display: block; }
+.tp-n span { color: var(--tp-muted); font-size: 12px; }
+.tp-n span.lb { display: block; font-size: 11px; color: var(--tp-hint); }
+.tp-n.d { border: 0.5px dashed var(--tp-dec-border); background: var(--tp-dec-bg); color: var(--tp-dec-text); }
+.tp-n.d span { color: var(--tp-dec-text); }
+.tp-n.x { border-color: var(--tp-abort-border); background: var(--tp-abort-bg); color: var(--tp-abort-text); }
+.tp-n.x span { color: var(--tp-abort-text); }
+.tp-n.io { border-radius: 999px; text-align: center; padding: 9px; border-color: #6B6A65; }
+.tp-ar { text-align: center; color: var(--tp-hint); font-size: 18px; line-height: 1; padding: 4px 0; }
+.tp-ph.llm .tp-n { background: #2B2950; border-color: #3C3489; }
+.tp-col { display: flex; flex-direction: column; gap: 6px; }
+</style>
+<style>html,body{margin:0;background:#1A1A19;} .tp{margin:0 auto;border-radius:0;}</style>
+</head><body>
+<div class="tp">
+
+<div class="tp-n io"><b>Software project (repository)</b></div>
+<div class="tp-ar">↓</div>
+
+<div class="tp-ph">
+  <p class="tp-pt">1 · Orchestration and acceptance check (Python scripts)</p>
+  <div class="tp-row">
+    <div class="tp-n"><b>Detect programming language</b><span>Files, build configs</span></div>
+    <div class="tp-col">
+      <div class="tp-n d"><b>Language supported?</b><span>C, C++, C#, Java, JS, TS, Python, Rust · yes → continue</span></div>
+      <div class="tp-n x"><span class="lb">no</span><b>Abort</b><span>Notice: language not supported</span></div>
+    </div>
+    <div class="tp-col">
+      <div class="tp-n d"><b>Package manager present?</b><span>yes → continue with analysis</span></div>
+      <div class="tp-n x"><span class="lb">no</span><b>Abort</b><span>Project is not accepted</span></div>
+    </div>
+  </div>
+</div>
+<div class="tp-ar">↓</div>
+
+<div class="tp-ph">
+  <p class="tp-pt">2 · Conventions &amp; formatting (per language)</p>
+  <div class="tp-row">
+    <div class="tp-n"><b>Install linter / formatter</b><span>Fixed rules per language (own configuration)</span></div>
+    <div class="tp-n"><b>Run on the project</b><span>Document results</span></div>
+  </div>
+</div>
+<div class="tp-ar">↓</div>
+
+<div class="tp-ph">
+  <p class="tp-pt">3 · Static code analysis (parallel)</p>
+  <div class="tp-row">
+    <div class="tp-n"><b>OpenGrep</b><span>Vulnerabilities, cross-file (XSS, injection) · comparison with CodeQL, possibly switch to CodeQL / SonarQube Enterprise</span></div>
+    <div class="tp-n"><b>SonarQube Community</b><span>Simple vulns, code smells, bugs, duplicates</span></div>
+  </div>
+</div>
+<div class="tp-ar">↓</div>
+
+<div class="tp-ph">
+  <p class="tp-pt">4 · Dependencies</p>
+  <div class="tp-row">
+    <div class="tp-n"><b>Stage 1: OSV-Scanner</b><span>All languages, many sources</span></div>
+    <div class="tp-n"><b>Stage 2: Package manager audit</b><span>e.g. npm audit, cargo audit</span></div>
+  </div>
+</div>
+<div class="tp-ar">↓</div>
+
+<div class="tp-ph">
+  <p class="tp-pt">5 · Tests</p>
+  <div class="tp-row">
+    <div class="tp-col">
+      <div class="tp-n d"><b>Tests present?</b></div>
+      <div class="tp-n"><span class="lb">no</span><b>Note in report</b></div>
+    </div>
+    <div class="tp-col">
+      <div class="tp-n"><span class="lb">yes</span><b>Run tests</b><span>Document results, including failures</span></div>
+      <div class="tp-n"><b>Measure test coverage</b><span>Project tool or defined per language · no minimum coverage</span></div>
+      <div class="tp-n"><b>Mutation testing</b><span>Project tool or defined (e.g. Stryker)</span></div>
+    </div>
+  </div>
+</div>
+<div class="tp-ar">↓</div>
+
+<div class="tp-n"><b>Store raw results in output folder</b><span>All tool outputs collected</span></div>
+<div class="tp-ar">↓</div>
+
+<div class="tp-ph llm">
+  <p class="tp-pt">6 · LLM evaluation via Ollama (local or cloud models, check costs)</p>
+  <div class="tp-row">
+    <div class="tp-n"><b>Security</b><span>Merge OpenGrep, SonarQube, OSV, package manager audit · filter duplicates, noise, false positives · classify, suggest actions</span></div>
+    <div class="tp-n"><b>Code quality</b><span>Summarize and filter linter/formatter results · check naming · assess project structure</span></div>
+    <div class="tp-n"><b>Test quality</b><span>Do the tests work? · interpret mutation results · compare tests vs. code · untested parts: critical or non-critical?</span></div>
+  </div>
+</div>
+<div class="tp-ar">↓</div>
+
+<div class="tp-n io"><b>Final report</b></div>
+
+</div>
+</body></html>
