@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434"
+# Network of the compose deployment; the tool containers join it.
+DEFAULT_TOOLS_NETWORK = "code-analysis-net"
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,10 @@ class Settings:
     # Home directory of the host user, used to expand "~" in entered paths.
     host_home: Path | None
     ollama_base_url: str
+    # Host folder for the results of each run (step 2 onwards). Mounted at the
+    # same path, so it can be passed on to the tool containers unchanged.
+    output_dir: Path | None = None
+    tools_network: str = DEFAULT_TOOLS_NETWORK
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -25,8 +31,12 @@ class Settings:
         projects_dir = env.get("PROJECTS_DIR", "").strip()
         host_home = env.get("HOST_HOME", "").strip()
         ollama_base_url = env.get("OLLAMA_BASE_URL", "").strip() or DEFAULT_OLLAMA_BASE_URL
+        output_dir = env.get("OUTPUT_DIR", "").strip()
+        tools_network = env.get("TOOLS_NETWORK", "").strip() or DEFAULT_TOOLS_NETWORK
         return cls(
             projects_dir=Path(projects_dir).resolve() if projects_dir else None,
             host_home=Path(host_home) if host_home else None,
             ollama_base_url=ollama_base_url.rstrip("/"),
+            output_dir=Path(output_dir).resolve() if output_dir else None,
+            tools_network=tools_network,
         )

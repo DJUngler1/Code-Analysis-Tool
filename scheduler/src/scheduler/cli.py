@@ -1,4 +1,4 @@
-"""Entry point: ask for the project and run the acceptance check (step 1)."""
+"""Entry point: ask for the project, check it (step 1), run linters and formatters (step 2)."""
 
 from __future__ import annotations
 
@@ -8,29 +8,36 @@ from pathlib import Path
 
 from scheduler.acceptance import AcceptanceResult, run_acceptance
 from scheduler.config import Settings
+from scheduler.linting import LintingResult, Status, run_linting
 from scheduler.ollama import OllamaStatus, check_ollama
 from scheduler.paths import PathError, resolve_project_path
 
 EXIT_INVALID_INPUT = 1
+# Step 2 could not run completely: OUTPUT_DIR, Docker or a tool image missing,
+# a tool failed, or project files could not be moved back.
+EXIT_LINTING_INCOMPLETE = 5
 MAX_LISTED_MANIFESTS = 5
 MAX_LISTED_MODELS = 5
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="code-analysis", description="Code-Analysis-Tool – project acceptance check")
+    parser = argparse.ArgumentParser(prog="code-analysis", description="Code-Analysis-Tool")
     parser.add_argument("--path", help="project to analyze (skips the interactive prompt)")
+    parser.add_argument(
+        "--check-only", action="store_true", help="only run the acceptance check (step 1), change nothing"
+    )
     args = parser.parse_args(argv)
     settings = Settings.from_env()
 
     try:
-        return _run(args.path, settings)
+        return _run(args.path, settings, check_only=args.check_only)
     except KeyboardInterrupt:
         print("\nInterrupted.")
         return EXIT_INVALID_INPUT
 
 
-def _run(path_arg: str | None, settings: Settings) -> int:
-    print("Code-Analysis-Tool – project acceptance check\n")
+def _run(path_arg: str | None, settings: Settings, *, check_only: bool = False) -> int:
+    print("Code-Analysis-Tool\n")
     print(describe_ollama(check_ollama(settings.ollama_base_url)))
     if settings.projects_dir is not None:
         print(f"Projects folder: {settings.projects_dir}")
@@ -48,10 +55,16 @@ def _run(path_arg: str | None, settings: Settings) -> int:
             print("No project selected – exiting.")
             return EXIT_INVALID_INPUT
 
-    print(f"\nChecking {project} ...\n")
+    print(f"\nStep 1 – checking {project} ...\n")
     result = run_acceptance(project)
     print(format_result(result))
-    return int(result.outcome)
+    if not result.accepted or check_only:
+        return int(result.outcome)
+
+    print("\nStep 2 – linters and formatters (the formatters change files in the project) ...\n")
+    linting = run_linting(result, settings)
+    print(format_linting(linting))
+    return int(result.outcome) if linting.complete else EXIT_LINTING_INCOMPLETE
 
 
 def prompt_for_project(settings: Settings) -> Path | None:
@@ -90,7 +103,7 @@ def format_result(result: AcceptanceResult) -> str:
 
     if report.primary is not None:
         shown = (report.primary, *report.others)
-        languages = ", ".join(f"{language} {report.share(language):.0%}" for language in shown)
+        languages = ", ".join(f"{language} {percent(report.share(language))}" for language in shown)
         lines.append(f"Languages:        {languages} (primary: {report.primary})")
 
     for language, hits in result.package_managers.items():
@@ -104,7 +117,7 @@ def format_result(result: AcceptanceResult) -> str:
         lines.append("Git:              clean working tree")
 
     warnings = [
-        f"{language} ({report.share(language):.0%}) is not supported and will be skipped in the analysis."
+        f"{language} ({percent(report.share(language))}) is not supported and will be skipped in the analysis."
         for language in report.unsupported_others
     ]
     if result.accepted:
@@ -118,4 +131,28 @@ def format_result(result: AcceptanceResult) -> str:
     if lines:
         lines.append("")
     lines.append(result.message)
+    return "\n".join(lines)
+
+
+def percent(share: float) -> str:
+    """Share of the source code; small but present languages show as "<1%"."""
+    return "<1%" if 0 < share < 0.005 else f"{share:.0%}"
+
+
+def format_linting(result: LintingResult) -> str:
+    lines: list[str] = []
+    if result.tool_runs:
+        findings = len(result.findings)
+        failed = [f"{run.language} {run.tool}" for run in result.tool_runs if run.status is Status.FAILED]
+        lines.append(
+            f"\n{findings} findings, {len(result.changed_files)} files changed by the tools."
+        )
+        if failed:
+            lines.append(f"Failed: {', '.join(failed)} (see the notes above and summary.json).")
+    lines += [f"Error: {error}" for error in result.errors]
+    if result.run_dir is not None:
+        lines.append(f"Results: {result.run_dir}")
+    if result.changed_files:
+        lines.append("Review the changes in the project with `git diff`, then commit or discard them.")
+    lines.append("Step 2 complete." if result.complete else "Step 2 incomplete.")
     return "\n".join(lines)

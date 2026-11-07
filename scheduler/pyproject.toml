@@ -20,3 +20,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["docker: needs Docker and the tool images; run with `pytest -m docker`"]
+addopts = "-m 'not docker'"

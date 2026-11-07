@@ -9,6 +9,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && git config --system --add safe.directory '*'
 
+# Docker CLI only (no daemon): starts the linter/formatter containers (step 2)
+# through the host's Docker socket, mounted in docker-compose.yml.
+COPY --from=docker:29.5.2-cli /usr/local/bin/docker /usr/local/bin/docker
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \

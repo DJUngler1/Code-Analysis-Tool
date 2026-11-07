@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "PMD",
+          "version": "7.29.0",
+          "informationUri": "https://docs.pmd-code.org/latest/",
+          "rules": [
+            {
+              "id": "NoPackage",
+              "shortDescription": {
+                "text": "All classes, interfaces, enums and annotations must belong to a named package"
+              },
+              "fullDescription": {
+                "text": "\nDetects when a class, interface, enum or annotation does not have a package definition.\n        "
+              },
+              "helpUri": "https://docs.pmd-code.org/snapshot/pmd_rules_java_codestyle.html#nopackage",
+              "help": {
+                "text": "\nDetects when a class, interface, enum or annotation does not have a package definition.\n        "
+              },
+              "properties": {
+                "ruleset": "Code Style",
+                "priority": 3,
+                "tags": [
+                  "Code Style"
+                ]
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              }
+            },
+            {
+              "id": "EmptyControlStatement",
+              "shortDescription": {
+                "text": "Empty if statement"
+              },
+              "fullDescription": {
+                "text": "\n            Reports control statements whose body is empty, as well as empty initializers.\n\n            The checked code constructs are the following:\n            - bodies of `try` statements\n            - `finally` clauses of `try` statements\n            - `switch` statements\n            - `synchronized` statements\n            - `if` statements\n            - loop statements: `while`, `for`, `do .. while`\n            - initializers\n            - blocks used as statements (for scoping)\n\n            This rule replaces the rules EmptyFinallyBlock,\n            EmptyIfStmt, EmptyInitializer, EmptyStatementBlock,\n            EmptySwitchStatements, EmptySynchronizedBlock, EmptyTryBlock, and EmptyWhileStmt.\n\n            Notice that {% rule java/errorprone/EmptyCatchBlock %} is still an independent rule.\n\n            EmptyStatementNotInLoop is replaced by {% rule java/codestyle/UnnecessarySemicolon %}.\n        "
+              },
+              "helpUri": "https://docs.pmd-code.org/snapshot/pmd_rules_java_codestyle.html#emptycontrolstatement",
+              "help": {
+                "text": "\n            Reports control statements whose body is empty, as well as empty initializers.\n\n            The checked code constructs are the following:\n            - bodies of `try` statements\n            - `finally` clauses of `try` statements\n            - `switch` statements\n            - `synchronized` statements\n            - `if` statements\n            - loop statements: `while`, `for`, `do .. while`\n            - initializers\n            - blocks used as statements (for scoping)\n\n            This rule replaces the rules EmptyFinallyBlock,\n            EmptyIfStmt, EmptyInitializer, EmptyStatementBlock,\n            EmptySwitchStatements, EmptySynchronizedBlock, EmptyTryBlock, and EmptyWhileStmt.\n\n            Notice that {% rule java/errorprone/EmptyCatchBlock %} is still an independent rule.\n\n            EmptyStatementNotInLoop is replaced by {% rule java/codestyle/UnnecessarySemicolon %}.\n        "
+              },
+              "properties": {
+                "ruleset": "Code Style",
+                "priority": 3,
+                "tags": [
+                  "Code Style"
+                ]
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              }
+            },
+            {
+              "id": "CompareObjectsWithEquals",
+              "shortDescription": {
+                "text": "Use equals() to compare object references."
+              },
+              "fullDescription": {
+                "text": "\nUse `equals()` to compare object references; avoid comparing them with `==`.\n\nSince comparing objects with named constants is useful in some cases (eg, when\ndefining constants for sentinel values), the rule ignores comparisons against\nfields with all-caps name (eg `this == SENTINEL`), which is a common naming\nconvention for constant fields.\n\nYou may allow some types to be compared by reference by listing the exceptions\nin the `typesThatCompareByReference` property.\n        "
+              },
+              "helpUri": "https://docs.pmd-code.org/snapshot/pmd_rules_java_errorprone.html#compareobjectswithequals",
+              "help": {
+                "text": "\nUse `equals()` to compare object references; avoid comparing them with `==`.\n\nSince comparing objects with named constants is useful in some cases (eg, when\ndefining constants for sentinel values), the rule ignores comparisons against\nfields with all-caps name (eg `this == SENTINEL`), which is a common naming\nconvention for constant fields.\n\nYou may allow some types to be compared by reference by listing the exceptions\nin the `typesThatCompareByReference` property.\n        "
+              },
+              "properties": {
+                "ruleset": "Error Prone",
+                "priority": 3,
+                "tags": [
+                  "Error Prone"
+                ]
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              }
+            },
+            {
+              "id": "UseEqualsToCompareStrings",
+              "shortDescription": {
+                "text": "Use equals() to compare strings instead of '==' or '!='"
+              },
+              "fullDescription": {
+                "text": "\nUsing '==' or '!=' to compare strings is only reliable if the interned string (`String#intern()`)\nis used on both sides.\n\nUse the `equals()` method instead.\n        "
+              },
+              "helpUri": "https://docs.pmd-code.org/snapshot/pmd_rules_java_errorprone.html#useequalstocomparestrings",
+              "help": {
+                "text": "\nUsing '==' or '!=' to compare strings is only reliable if the interned string (`String#intern()`)\nis used on both sides.\n\nUse the `equals()` method instead.\n        "
+              },
+              "properties": {
+                "ruleset": "Error Prone",
+                "priority": 3,
+                "tags": [
+                  "Error Prone"
+                ]
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "NoPackage",
+          "ruleIndex": 0,
+          "message": {
+            "text": "All classes, interfaces, enums and annotations must belong to a named package"
+          },
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///work/java/Ok.java"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 14,
+                  "endLine": 1,
+                  "endColumn": 16
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "EmptyControlStatement",
+          "ruleIndex": 1,
+          "message": {
+            "text": "Empty if statement"
+          },
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///work/java/Ok.java"
+                },
+                "region": {
+                  "startLine": 6,
+                  "startColumn": 5,
+                  "endLine": 6,
+                  "endColumn": 21
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CompareObjectsWithEquals",
+          "ruleIndex": 2,
+          "message": {
+            "text": "Use equals() to compare object references."
+          },
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///work/java/Ok.java"
+                },
+                "region": {
+                  "startLine": 6,
+                  "startColumn": 9,
+                  "endLine": 6,
+                  "endColumn": 17
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "UseEqualsToCompareStrings",
+          "ruleIndex": 3,
+          "message": {
+            "text": "Use equals() to compare strings instead of '==' or '!='"
+          },
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///work/java/Ok.java"
+                },
+                "region": {
+                  "startLine": 6,
+                  "startColumn": 9,
+                  "endLine": 6,
+                  "endColumn": 17
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": false,
+          "toolConfigurationNotifications": [],
+          "toolExecutionNotifications": [
+            {
+              "locations": [
+                {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "file:///work/java/Bad.java"
+                    }
+                  }
+                }
+              ],
+              "message": {
+                "text": "ParseException: Parse exception in file '/work/java/Bad.java' at line 1, column 28: Encountered \"{\".\nWas expecting:\n    \")\" ..."
+              },
+              "exception": {
+                "message": "net.sourceforge.pmd.lang.ast.ParseException: Parse exception in file '/work/java/Bad.java' at line 1, column 28: Encountered \"{\".\nWas expecting:\n    \")\" ...\n\tat net.sourceforge.pmd.lang.java.ast.JavaParserImpl.generateParseException(JavaParserImpl.java:14986)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParserImpl.jj_consume_token(JavaParserImpl.java:14867)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParserImpl.FormalParameters(JavaParserImpl.java:1853)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParserImpl.MethodDeclaration(JavaParserImpl.java:1770)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParserImpl.ClassOrInterfaceBodyDeclaration(JavaParserImpl.java:1483)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParserImpl.ClassOrInterfaceBody(JavaParserImpl.java:1443)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParserImpl.ClassOrInterfaceDeclaration(JavaParserImpl.java:825)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParserImpl.TypeDeclaration(JavaParserImpl.java:757)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParserImpl.CompilationUnit(JavaParserImpl.java:385)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParser.parseImpl(JavaParser.java:57)\n\tat net.sourceforge.pmd.lang.java.ast.JavaParser.parseImpl(JavaParser.java:25)\n\tat net.sourceforge.pmd.lang.ast.impl.javacc.JjtreeParserAdapter.parse(JjtreeParserAdapter.java:36)\n\tat net.sourceforge.pmd.lang.impl.PmdRunnable.parse(PmdRunnable.java:112)\n\tat net.sourceforge.pmd.lang.impl.PmdRunnable.processSource(PmdRunnable.java:132)\n\tat net.sourceforge.pmd.lang.impl.PmdRunnable.run(PmdRunnable.java:80)\n\tat java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:545)\n\tat java.base/java.util.concurrent.FutureTask.run(FutureTask.java:330)\n\tat java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)\n\tat java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)\n\tat java.base/java.lang.Thread.run(Thread.java:1527)\n"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

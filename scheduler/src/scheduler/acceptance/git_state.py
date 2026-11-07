@@ -7,10 +7,16 @@ makes every change by the tool visible in `git diff` and revertible.
 from __future__ import annotations
 
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 GIT_TIMEOUT_SECONDS = 120
+# Docker Desktop's file sharing can show the container an outdated .git/index
+# for about a second after git changed it on the host (e.g. `git commit &&
+# code-analysis`). git then reports every file as deleted and untracked.
+STALE_INDEX_RETRIES = 3
+STALE_INDEX_WAIT_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,11 @@ def check_git_state(project: Path) -> GitState:
         # --untracked-files=normal overrides a repo config that hides untracked
         # files: a formatter could change those without any way to revert.
         status = _git(project, "status", "--porcelain", "--untracked-files=normal", "--", ".")
+        for _ in range(STALE_INDEX_RETRIES):
+            if status.returncode != 0 or not looks_like_stale_index(status.stdout.splitlines()):
+                break
+            time.sleep(STALE_INDEX_WAIT_SECONDS)
+            status = _git(project, "status", "--porcelain", "--untracked-files=normal", "--", ".")
     except FileNotFoundError:
         return GitState(is_repo=False, error="git is not installed")
     except subprocess.TimeoutExpired:
@@ -43,6 +54,13 @@ def check_git_state(project: Path) -> GitState:
     if status.returncode != 0:
         return GitState(is_repo=True, error=status.stderr.strip() or "git status failed")
     return GitState(is_repo=True, changes=tuple(line for line in status.stdout.splitlines() if line))
+
+
+def looks_like_stale_index(lines: list[str]) -> bool:
+    """Every change is a file that is both staged as deleted and untracked."""
+    deleted = {line[3:] for line in lines if line.startswith("D  ")}
+    untracked = {line[3:] for line in lines if line.startswith("?? ")}
+    return bool(deleted) and deleted == untracked and len(lines) == 2 * len(deleted)
 
 
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:

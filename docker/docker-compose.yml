@@ -1,13 +1,16 @@
 # Code-Analysis-Tool – Docker deployment
 #
 # Usage (from the repository root):
-#   cp docker/.env.example docker/.env      # then set PROJECTS_DIR
+#   cp docker/.env.example docker/.env      # then set PROJECTS_DIR and OUTPUT_DIR
+#   docker compose -f docker/docker-compose.yml --profile tools build   # tool images, once
 #   docker compose -f docker/docker-compose.yml up -d --build
 #   bin/code-analysis                       # from any terminal, as often as needed
 #   docker compose -f docker/docker-compose.yml down
 #
 # After `up` the scheduler container idles. Each `bin/code-analysis` runs the
 # tool inside it via `docker exec`; the container keeps running afterwards.
+# For every linter/formatter run, the scheduler starts a fresh container from
+# one of the lint-* images (profile "tools") through the Docker socket.
 
 name: code-analysis
 
@@ -25,22 +28,68 @@ services:
     # Files written into the project (formatter step) keep the host user as
     # owner on Linux. Docker Desktop (macOS/Windows) maps ownership itself.
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    # Group of /var/run/docker.sock inside containers: lets the scheduler start
+    # the tool containers without running as root. 991 on Docker Desktop; on
+    # Linux the group of the socket (`stat -c %g /var/run/docker.sock`).
+    group_add:
+      - "${DOCKER_SOCKET_GID:-991}"
     environment:
       PROJECTS_DIR: ${PROJECTS_DIR}
+      OUTPUT_DIR: ${OUTPUT_DIR}
       HOST_HOME: ${HOME}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
       # Mounted read-write at the same absolute path as on the host, so host
-      # paths can be pasted unchanged at the prompt.
+      # paths can be pasted unchanged at the prompt and passed on unchanged to
+      # the tool containers.
       - type: bind
         source: ${PROJECTS_DIR:?Set PROJECTS_DIR in docker/.env (see docker/.env.example)}
         target: ${PROJECTS_DIR}
+      # Results of each run (step 2 onwards), same path as on the host.
+      - type: bind
+        source: ${OUTPUT_DIR:?Set OUTPUT_DIR in docker/.env (see docker/.env.example)}
+        target: ${OUTPUT_DIR}
+        bind:
+          create_host_path: true
+      # Starts the tool containers. Project code (build scripts, analyzers)
+      # only runs in those containers, which do not get the socket.
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
     extra_hosts:
       # Docker Desktop already provides host.docker.internal; this entry makes
       # it point to the host on Linux as well (used to reach Ollama).
       - "host.docker.internal:host-gateway"
     networks:
       - analysis-net
+
+  # Linter/formatter images (step 2), one per language. Only built, never
+  # started by compose: the scheduler runs them per tool call.
+  # Definition of the tools: docs/linterConventions/README.md
+  lint-cpp:
+    profiles: ["tools"]
+    build: linters/cpp
+    image: code-analysis/lint-cpp:latest
+  lint-dotnet:
+    profiles: ["tools"]
+    build: linters/dotnet
+    image: code-analysis/lint-dotnet:latest
+  lint-java:
+    profiles: ["tools"]
+    build: linters/java
+    image: code-analysis/lint-java:latest
+  lint-node:
+    profiles: ["tools"]
+    build: linters/node
+    image: code-analysis/lint-node:latest
+  lint-python:
+    profiles: ["tools"]
+    build: linters/python
+    image: code-analysis/lint-python:latest
+  lint-rust:
+    profiles: ["tools"]
+    build: linters/rust
+    image: code-analysis/lint-rust:latest
 
 networks:
   # Shared network for the scheduler and the analysis tool containers

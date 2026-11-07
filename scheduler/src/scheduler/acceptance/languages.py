@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from scheduler.acceptance.filetree import ProjectFile
 
@@ -50,8 +51,10 @@ EXTENSION_TO_LANGUAGE = {
 MAX_FILE_BYTES = 1_000_000
 GENERATED_SUFFIXES = (".min.js", ".d.ts", ".d.mts", ".d.cts")
 
-# Share of the source code from which a non-primary language is reported.
-SIGNIFICANT_SHARE = 0.10
+# Extensions shared with XML formats: Qt translation files (.ts) and tilesets
+# of the Tiled map editor (.tsx). Such files are not TypeScript.
+XML_SUFFIXES = (".ts", ".tsx")
+XML_START = (b"<?xml", b"<!DOCTYPE", b"<TS", b"<tileset")
 
 
 @dataclass(frozen=True)
@@ -73,12 +76,8 @@ class LanguageReport:
 
     @property
     def others(self) -> tuple[str, ...]:
-        """Non-primary languages with a significant share of the code."""
-        return tuple(
-            language
-            for language in self.bytes_by_language
-            if language != self.primary and self.share(language) >= SIGNIFICANT_SHARE
-        )
+        """All non-primary languages with source code, however small their share."""
+        return tuple(language for language in self.bytes_by_language if language != self.primary)
 
     @property
     def supported_others(self) -> tuple[str, ...]:
@@ -93,7 +92,8 @@ class LanguageReport:
         return self.bytes_by_language.get(language, 0) / total if total else 0.0
 
 
-def detect_languages(files: Iterable[ProjectFile]) -> LanguageReport:
+def detect_languages(files: Iterable[ProjectFile], root: Path | None = None) -> LanguageReport:
+    """Bytes of source code per language. With root, .ts/.tsx files are checked for XML."""
     totals: Counter[str] = Counter()
     header_bytes = 0
     for file in files:
@@ -101,6 +101,8 @@ def detect_languages(files: Iterable[ProjectFile]) -> LanguageReport:
         if file.size > MAX_FILE_BYTES or name.endswith(GENERATED_SUFFIXES):
             continue
         suffix = file.path.suffix.lower()
+        if root is not None and suffix in XML_SUFFIXES and _is_xml(root / file.path):
+            continue
         if suffix == ".h":
             header_bytes += file.size
         elif language := EXTENSION_TO_LANGUAGE.get(suffix):
@@ -115,3 +117,12 @@ def detect_languages(files: Iterable[ProjectFile]) -> LanguageReport:
 
     ordered = sorted((+totals).items(), key=lambda item: (-item[1], item[0]))
     return LanguageReport(dict(ordered))
+
+
+def _is_xml(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            start = handle.read(256).lstrip(b"\xef\xbb\xbf \t\r\n")
+    except OSError:
+        return False
+    return start.startswith(XML_START)

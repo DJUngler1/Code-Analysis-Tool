@@ -3,6 +3,7 @@ from conftest import commit_all, requires_git
 from test_ollama import unused_port
 
 from scheduler.cli import main
+from scheduler.linting import LintingResult, Status, ToolRun
 
 
 @pytest.fixture(autouse=True)
@@ -10,6 +11,18 @@ def isolated_env(monkeypatch, tmp_path):
     monkeypatch.setenv("PROJECTS_DIR", str(tmp_path))
     monkeypatch.setenv("OLLAMA_BASE_URL", f"http://127.0.0.1:{unused_port()}")
     monkeypatch.delenv("HOST_HOME", raising=False)
+
+
+def fake_linting(monkeypatch, result: LintingResult) -> list:
+    """Replace step 2 (Docker) and record its calls."""
+    calls = []
+
+    def fake(acceptance, settings):
+        calls.append(acceptance.project)
+        return result
+
+    monkeypatch.setattr("scheduler.cli.run_linting", fake)
+    return calls
 
 
 def feed_input(monkeypatch, *answers):
@@ -24,10 +37,12 @@ def feed_input(monkeypatch, *answers):
 
 
 @requires_git
-def test_accepted_project_via_prompt(monkeypatch, make_project, capsys):
+def test_accepted_project_via_prompt(monkeypatch, make_project, capsys, tmp_path):
     root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
     commit_all(root)
     feed_input(monkeypatch, "/definitely/outside", str(root))
+    run = ToolRun("Python", "ruff check", Status.OK, changed_files=["main.py"])
+    calls = fake_linting(monkeypatch, LintingResult(tmp_path / "run", [run], changed_files=["main.py"]))
 
     assert main([]) == 0
     out = capsys.readouterr().out
@@ -36,6 +51,39 @@ def test_accepted_project_via_prompt(monkeypatch, make_project, capsys):
     assert "Languages:        Python 100% (primary: Python)" in out
     assert "Package managers: Python: pip (requirements.txt)" in out
     assert "Project accepted." in out
+    assert calls == [root]
+    assert f"Results: {tmp_path / 'run'}" in out
+    assert "git diff" in out
+    assert "Step 2 complete." in out
+
+
+@requires_git
+def test_check_only_skips_step_2(monkeypatch, make_project, capsys):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    calls = fake_linting(monkeypatch, LintingResult(None))
+    assert main(["--path", str(root), "--check-only"]) == 0
+    assert calls == []
+    assert "Step 2" not in capsys.readouterr().out
+
+
+@requires_git
+def test_incomplete_step_2_exits_with_5(monkeypatch, make_project, capsys, tmp_path):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    failed = ToolRun("Python", "ruff check", Status.FAILED, notes=["ruff check failed"])
+    fake_linting(monkeypatch, LintingResult(tmp_path / "run", [failed]))
+    assert main(["--path", str(root)]) == 5
+    out = capsys.readouterr().out
+    assert "Failed: Python ruff check" in out
+    assert "Step 2 incomplete." in out
+
+
+def test_rejected_project_does_not_run_step_2(monkeypatch, make_project, capsys):
+    root = make_project({"main.go": "package main\n"})
+    calls = fake_linting(monkeypatch, LintingResult(None))
+    assert main(["--path", str(root)]) == 2
+    assert calls == []
 
 
 def test_rejected_project_via_path_argument(make_project, capsys):
@@ -53,3 +101,11 @@ def test_empty_input_exits(monkeypatch, capsys):
     feed_input(monkeypatch, "")
     assert main([]) == 1
     assert "No project selected" in capsys.readouterr().out
+
+
+def test_percent():
+    from scheduler.cli import percent
+
+    assert percent(0.6515) == "65%"
+    assert percent(0.0013) == "<1%"
+    assert percent(0.0) == "0%"

@@ -40,6 +40,9 @@ def git(root: Path, *args: str) -> None:
             "-c", "user.email=test@example.com",
             "-c", "commit.gpgsign=false",
             "-c", "core.hooksPath=/dev/null",
+            # No background gc/maintenance: it would repack objects mid-test.
+            "-c", "gc.auto=0",
+            "-c", "maintenance.auto=false",
             "-C", str(root),
             *args,
         ],

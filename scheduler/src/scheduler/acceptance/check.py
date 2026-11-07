@@ -42,7 +42,7 @@ class AcceptanceResult:
 def run_acceptance(project: Path) -> AcceptanceResult:
     """Run the checks in flowchart order and stop at the first failure."""
     files = scan_project(project)
-    languages = detect_languages(files)
+    languages = detect_languages(files, root=project)
     primary = languages.primary
     supported = ", ".join(SUPPORTED_LANGUAGES)
 

@@ -41,3 +41,34 @@ def test_only_the_project_subfolder_is_checked(make_project):
     (root / "other" / "lib.py").write_text("print(2)\n")
     assert check_git_state(root / "service").clean
     assert not check_git_state(root).clean
+
+
+def test_stale_index_pattern():
+    from scheduler.acceptance.git_state import looks_like_stale_index
+
+    assert looks_like_stale_index(["D  a.py", "D  b.py", "?? a.py", "?? b.py"])
+    assert not looks_like_stale_index(["D  a.py", "?? a.py", " M b.py"])
+    assert not looks_like_stale_index(["?? a.py"])
+    assert not looks_like_stale_index([])
+
+
+@requires_git
+def test_stale_index_is_retried(make_project, monkeypatch):
+    import subprocess as sp
+
+    from scheduler.acceptance import git_state
+
+    root = make_project({"a.py": "x = 1\n"})
+    commit_all(root)
+    stale = sp.CompletedProcess([], 0, "D  a.py\n?? a.py\n", "")
+    real = git_state._git
+    answers = [stale]
+
+    def fake_git(project, *args):
+        if args[0] == "status" and answers:
+            return answers.pop()
+        return real(project, *args)
+
+    monkeypatch.setattr(git_state, "_git", fake_git)
+    monkeypatch.setattr(git_state, "STALE_INDEX_WAIT_SECONDS", 0)
+    assert check_git_state(root).clean
