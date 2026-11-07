@@ -19,4 +19,7 @@ COPY scheduler/pyproject.toml ./
 COPY scheduler/src ./src
 RUN pip install --no-cache-dir .
 
-ENTRYPOINT ["python", "-m", "scheduler"]
+# The container only idles; the tool (console script `code-analysis`) is started
+# in it with `docker exec`, see bin/code-analysis. Stopping is immediate because
+# docker-compose.yml runs this under an init process (`init: true`).
+CMD ["sleep", "infinity"]

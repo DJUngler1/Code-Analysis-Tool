@@ -14,12 +14,24 @@ Requirements: Docker (Docker Desktop on macOS/Windows) and, for the LLM evaluati
    cp docker/.env.example docker/.env
    ```
    Set `PROJECTS_DIR` in `docker/.env` to the folder that contains your projects. It is mounted **read-write** at the same path inside the container, so you can paste host paths unchanged. Only projects below this folder can be analyzed.
-2. Build and start (from the repository root):
+2. Build and start the container (from the repository root):
    ```sh
-   docker compose -f docker/docker-compose.yml build
-   docker compose -f docker/docker-compose.yml run --rm scheduler
+   docker compose -f docker/docker-compose.yml up -d --build
    ```
-   Use `run`, not `up`: the tool asks for the project path interactively. To skip the prompt, append `--path /path/to/project`.
+   The container starts and waits; nothing is analyzed yet.
+3. Run the tool, from any terminal and as often as you like:
+   ```sh
+   bin/code-analysis
+   ```
+   It asks for the project path and runs the analysis inside the container. The container keeps running afterwards for the next run. To skip the prompt, pass the path: `bin/code-analysis --path /path/to/project`.
+
+   To call it from anywhere as `code-analysis`, link the script into a folder on your `PATH`, e.g. `ln -s "$PWD/bin/code-analysis" ~/.local/bin/code-analysis`. Without the script (e.g. on Windows): `docker exec -it code-analysis-scheduler code-analysis`.
+4. Stop the container when you are done:
+   ```sh
+   docker compose -f docker/docker-compose.yml down
+   ```
+
+After changes to the scheduler code, rebuild with `up -d --build` again.
 
 ### Acceptance check (step 1)
 
@@ -35,6 +47,7 @@ A project is accepted when:
 | 2 | Language not supported, or no source code found |
 | 3 | No package manager found for the primary language |
 | 4 | Not a git repository, or uncommitted changes |
+| 125 | (`bin/code-analysis` only) Docker or the container is not running |
 
 ### Ollama
 

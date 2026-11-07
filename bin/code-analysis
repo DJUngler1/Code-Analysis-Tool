@@ -1,0 +1,33 @@
+#!/bin/sh
+# Runs the Code-Analysis-Tool in the running scheduler container.
+# All arguments are passed on, e.g. `bin/code-analysis --path /path/to/project`.
+#
+# Start the container first (from the repository root):
+#   docker compose -f docker/docker-compose.yml up -d
+set -eu
+
+CONTAINER=code-analysis-scheduler
+EXIT_NOT_RUNNING=125  # same code docker uses when it cannot start a command
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Error: docker not found. Install Docker (Docker Desktop on macOS/Windows)." >&2
+    exit "$EXIT_NOT_RUNNING"
+fi
+
+running=$(docker container inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)
+if [ "$running" != "true" ]; then
+    if ! docker info >/dev/null 2>&1; then
+        echo "Error: Docker is not running. Start Docker (Desktop) first." >&2
+    else
+        echo "Error: the container '$CONTAINER' is not running. Start it from the repository root with:" >&2
+        echo "  docker compose -f docker/docker-compose.yml up -d" >&2
+    fi
+    exit "$EXIT_NOT_RUNNING"
+fi
+
+# A terminal is only allocated when there is one: `-t` fails when input is
+# piped or the script runs in CI, which is fine with --path.
+if [ -t 0 ] && [ -t 1 ]; then
+    exec docker exec -it "$CONTAINER" code-analysis "$@"
+fi
+exec docker exec -i "$CONTAINER" code-analysis "$@"
