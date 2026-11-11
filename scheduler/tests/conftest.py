@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from collections.abc import Callable, Mapping
@@ -8,6 +9,23 @@ from pathlib import Path
 import pytest
 
 requires_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+
+REPOSITORY = Path(__file__).resolve().parents[2]
+DEFAULT_RULESETS = ("opengrep-rules", "0xdea-semgrep-rules")
+
+
+def opengrep_config(folder: Path, rulesets: tuple[str, ...] = DEFAULT_RULESETS) -> Path:
+    """A copy of config/opengrep.toml with the given active rule sets.
+
+    Keeps the tests independent of the rule sets the user has activated.
+    """
+    text = (REPOSITORY / "config" / "opengrep.toml").read_text()
+    active = ", ".join(f'"{name}"' for name in rulesets)
+    text, count = re.subn(r"(?m)^rulesets = \[.*\]$", f"rulesets = [{active}]", text)
+    assert count == 1, "config/opengrep.toml: no `rulesets = [...]` line"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "opengrep.toml").write_text(text)
+    return folder
 
 MakeProject = Callable[[Mapping[str, str]], Path]
 

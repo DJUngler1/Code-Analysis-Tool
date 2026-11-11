@@ -10,6 +10,8 @@ from pathlib import Path
 DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434"
 # Network of the compose deployment; the tool containers join it.
 DEFAULT_TOOLS_NETWORK = "code-analysis-net"
+# The repository's config/ folder, used when running from the source tree.
+REPOSITORY_CONFIG_DIR = Path(__file__).resolve().parents[3] / "config"
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,9 @@ class Settings:
     # same path, so it can be passed on to the tool containers unchanged.
     output_dir: Path | None = None
     tools_network: str = DEFAULT_TOOLS_NETWORK
+    # Tool configuration (opengrep.toml). docker-compose.yml mounts the
+    # repository's config/ folder and sets CONFIG_DIR.
+    config_dir: Path | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -33,10 +38,16 @@ class Settings:
         ollama_base_url = env.get("OLLAMA_BASE_URL", "").strip() or DEFAULT_OLLAMA_BASE_URL
         output_dir = env.get("OUTPUT_DIR", "").strip()
         tools_network = env.get("TOOLS_NETWORK", "").strip() or DEFAULT_TOOLS_NETWORK
+        config_dir = env.get("CONFIG_DIR", "").strip()
         return cls(
             projects_dir=Path(projects_dir).resolve() if projects_dir else None,
             host_home=Path(host_home) if host_home else None,
             ollama_base_url=ollama_base_url.rstrip("/"),
             output_dir=Path(output_dir).resolve() if output_dir else None,
             tools_network=tools_network,
+            config_dir=Path(config_dir) if config_dir else _repository_config_dir(),
         )
+
+
+def _repository_config_dir() -> Path | None:
+    return REPOSITORY_CONFIG_DIR if REPOSITORY_CONFIG_DIR.is_dir() else None

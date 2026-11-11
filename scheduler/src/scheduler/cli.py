@@ -1,4 +1,5 @@
-"""Entry point: ask for the project, check it (step 1), run linters and formatters (step 2)."""
+"""Entry point: ask for the project, check it (step 1), run linters and formatters (step 2),
+run the static code analysis (step 3)."""
 
 from __future__ import annotations
 
@@ -12,11 +13,16 @@ from scheduler.config import Settings
 from scheduler.linting import LintingResult, Status, run_linting
 from scheduler.ollama import OllamaStatus, check_ollama
 from scheduler.paths import PathError, resolve_project_path
+from scheduler.static_analysis import AnalysisResult, run_static_analysis
+from scheduler.static_analysis.run import STEP_DIR as ANALYSIS_STEP_DIR
 
 EXIT_INVALID_INPUT = 1
 # Step 2 could not run completely: OUTPUT_DIR, Docker or a tool image missing,
 # a tool failed, or project files could not be moved back.
 EXIT_LINTING_INCOMPLETE = 5
+# Step 3 could not run completely: rule set configuration invalid, Docker or
+# the OpenGrep image missing or outdated, or OpenGrep failed.
+EXIT_ANALYSIS_INCOMPLETE = 6
 MAX_LISTED_MANIFESTS = 5
 MAX_LISTED_MODELS = 5
 
@@ -65,7 +71,17 @@ def _run(path_arg: str | None, settings: Settings, *, check_only: bool = False) 
     print("\nStep 2 – linters and formatters (the formatters change files in the project) ...\n")
     linting = run_linting(result, settings)
     print(format_linting(linting))
-    return int(result.outcome) if linting.complete else EXIT_LINTING_INCOMPLETE
+    if linting.run_dir is None:
+        print("\nStep 3 skipped: there is no results folder (see the error above).")
+        return EXIT_LINTING_INCOMPLETE
+
+    # Runs even if a linter failed: the analysis does not depend on step 2.
+    print("\nStep 3 – static code analysis (OpenGrep) ...\n")
+    analysis = run_static_analysis(result, settings, linting.run_dir)
+    print(format_analysis(analysis))
+    if not linting.complete:
+        return EXIT_LINTING_INCOMPLETE
+    return int(result.outcome) if analysis.complete else EXIT_ANALYSIS_INCOMPLETE
 
 
 def prompt_for_project(settings: Settings) -> Path | None:
@@ -160,4 +176,26 @@ def format_linting(result: LintingResult) -> str:
     if result.changed_files:
         lines.append("Review the changes in the project with `git diff`, then commit or discard them.")
     lines.append("Step 2 complete." if result.complete else "Step 2 incomplete.")
+    return "\n".join(lines)
+
+
+def format_analysis(result: AnalysisResult) -> str:
+    lines: list[str] = []
+    if result.tool_runs:
+        findings = result.findings
+        by_severity = Counter(finding.severity for finding in findings)
+        detail = ", ".join(f"{count} {severity}" for severity, count in by_severity.most_common())
+        lines.append(f"\n{len(findings)} findings" + (f" ({detail})." if detail else "."))
+        rulesets = {
+            entry["name"]: entry["commit"][:7] for run in result.tool_runs for entry in run.rulesets
+        }
+        if rulesets:
+            lines.append("Rule sets: " + ", ".join(f"{name} ({commit})" for name, commit in rulesets.items()))
+        failed = [run.tool for run in result.tool_runs if run.status is Status.FAILED]
+        if failed:
+            lines.append(f"Failed: {', '.join(failed)} (see the notes above and summary.json).")
+    lines += [f"Error: {error}" for error in result.errors]
+    if result.run_dir is not None:
+        lines.append(f"Results: {result.run_dir / ANALYSIS_STEP_DIR}")
+    lines.append("Step 3 complete." if result.complete else "Step 3 incomplete.")
     return "\n".join(lines)

@@ -160,6 +160,45 @@ def test_build_run_args():
     assert args[-4:] == ["code-analysis/lint-python:latest", "ruff", "check", "."]
 
 
+def test_build_run_args_with_read_only_mounts():
+    args = build_run_args(
+        "code-analysis/opengrep:latest",
+        ["opengrep", "scan", "."],
+        name="code-analysis-test",
+        workdir=Path("/projects/app"),
+        mounts=[Path("/projects/app/out"), Path("/results/run")],
+        read_only=[Path("/projects/app"), Path("/projects/app/src"), Path("/results/run/x")],
+        env=None,
+        user="1000:1000",
+        network="none",
+    )
+    mounts = [args[i + 1] for i, arg in enumerate(args) if arg == "--mount"]
+    # The writable folder inside the read-only project stays writable;
+    # read-only mounts inside a writable one are dropped.
+    assert mounts == [
+        "type=bind,source=/projects/app,target=/projects/app,readonly",
+        "type=bind,source=/results/run,target=/results/run",
+        "type=bind,source=/projects/app/out,target=/projects/app/out",
+    ]
+    assert args[args.index("--network") + 1] == "none"
+
+
+def test_runner_network_can_be_overridden_per_command(monkeypatch):
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen["args"] = args
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr("scheduler.linting.docker.subprocess.run", fake_run)
+    runner = DockerRunner("code-analysis-net", user="1:1")
+    runner.run("img", ["true"], workdir=Path("/w"), mounts=[], timeout=5)
+    assert seen["args"][seen["args"].index("--network") + 1] == "code-analysis-net"
+    runner.run("img", ["true"], workdir=Path("/w"), mounts=[], timeout=5, network="none", read_only=[Path("/w")])
+    assert seen["args"][seen["args"].index("--network") + 1] == "none"
+    assert "type=bind,source=/w,target=/w,readonly" in seen["args"]
+
+
 def test_permission_error_names_the_socket_group(monkeypatch, tmp_path):
     socket = tmp_path / "docker.sock"
     socket.write_text("")

@@ -1,0 +1,645 @@
+{
+ "version": "1.33.1",
+ "results": [
+  {
+   "check_id": "opt.code-analysis.opengrep.rulesets.0xdea-semgrep-rules.rules.c.raptor-insecure-api-strcpy-strcat",
+   "path": "native/copy.cpp",
+   "start": {
+    "line": 3,
+    "col": 5,
+    "offset": 63
+   },
+   "end": {
+    "line": 3,
+    "col": 21,
+    "offset": 79
+   },
+   "extra": {
+    "metavars": {},
+    "message": "A buffer overflow condition exists when a program attempts to put more data in a buffer than it can hold, or when a program attempts to put data in a memory area outside of the boundaries of a buffer.",
+    "metadata": {
+     "author": "Marco Ivaldi <raptor@0xdeadbeef.info>",
+     "category": "security",
+     "subcategory": [
+      "vuln"
+     ],
+     "vulnerability_class": "Dangerous Method or Function",
+     "likelihood": "HIGH",
+     "impact": "HIGH",
+     "confidence": "HIGH",
+     "technology": [
+      "c",
+      "cpp"
+     ],
+     "cwe": [
+      "CWE-676: Use of Potentially Dangerous Function",
+      "CWE-120: Buffer Copy without Checking Size of Input ('Classic Buffer Overflow')",
+      "CWE-787: Out-of-bounds Write"
+     ],
+     "owasp": [
+      "A10:2025 - Mishandling of Exceptional Conditions"
+     ],
+     "references": [
+      "https://g.co/kgs/PCHQjJ"
+     ]
+    },
+    "severity": "ERROR",
+    "fingerprint": "1a9501e89eb7b85139ad23b42061314d604112ec8558eb9b617559910a6d9978ba9d808764afe9897551ad9bb89612220b63ab88f398f56f6cf86886f953bd64_0",
+    "lines": "    strcpy(dst, src);",
+    "is_ignored": false,
+    "validation_state": "NO_VALIDATOR",
+    "engine_kind": "OSS"
+   }
+  },
+  {
+   "check_id": "opt.code-analysis.opengrep.rulesets.0xdea-semgrep-rules.rules.c.raptor-interesting-api-calls",
+   "path": "native/copy.cpp",
+   "start": {
+    "line": 3,
+    "col": 5,
+    "offset": 63
+   },
+   "end": {
+    "line": 3,
+    "col": 21,
+    "offset": 79
+   },
+   "extra": {
+    "metavars": {
+     "$1": {
+      "start": {
+       "line": 1,
+       "col": 4,
+       "offset": 3
+      },
+      "end": {
+       "line": 1,
+       "col": 7,
+       "offset": 6
+      },
+      "abstract_content": "cpy"
+     },
+     "$FUN": {
+      "start": {
+       "line": 3,
+       "col": 5,
+       "offset": 63
+      },
+      "end": {
+       "line": 3,
+       "col": 11,
+       "offset": 69
+      },
+      "abstract_content": "strcpy"
+     }
+    },
+    "message": "Locate all calls to interesting and potentially insecure API functions (candidate points). The auditor can backtrace from these candidate points to find pathways allowing access from untrusted input.",
+    "metadata": {
+     "author": "Marco Ivaldi <raptor@0xdeadbeef.info>",
+     "category": "security",
+     "subcategory": [
+      "audit"
+     ],
+     "vulnerability_class": "Dangerous Method or Function",
+     "likelihood": "MEDIUM",
+     "impact": "MEDIUM",
+     "confidence": "MEDIUM",
+     "technology": [
+      "c",
+      "cpp"
+     ],
+     "cwe": [
+      "CWE-676: Use of Potentially Dangerous Function"
+     ],
+     "owasp": [
+      "A08:2025 - Software or Data Integrity Failures"
+     ],
+     "references": [
+      "https://github.com/0xdea/rhabdomancer",
+      "https://github.com/0xdea/ghidra-scripts/blob/main/Rhabdomancer.java",
+      "https://github.com/x509cert/banned/blob/master/banned.h",
+      "https://g.co/kgs/PCHQjJ",
+      "https://www.sei.cmu.edu/downloads/sei-cert-c-coding-standard-2016-v01.pdf",
+      "https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/28719-banned-api-usage-use-updated-function-replacement",
+      "https://docs.oracle.com/cd/E37838_01/html/E61050/gnclc.html"
+     ]
+    },
+    "severity": "WARNING",
+    "fingerprint": "56c63b5d686356e9075b7ed98c6093f2fec390e054cc620733b31ff1b8a2470ce699f914b27cfd2e3161d8a4d6c0e8f270378dcf28522e1f234f6fc39aaa1058_0",
+    "lines": "    strcpy(dst, src);",
+    "is_ignored": false,
+    "validation_state": "NO_VALIDATOR",
+    "engine_kind": "OSS"
+   }
+  },
+  {
+   "check_id": "opt.code-analysis.opengrep.rulesets.opengrep-rules.python.flask.security.injection.subprocess-injection",
+   "path": "src/app.py",
+   "start": {
+    "line": 8,
+    "col": 12,
+    "offset": 101
+   },
+   "end": {
+    "line": 8,
+    "col": 52,
+    "offset": 141
+   },
+   "extra": {
+    "metavars": {
+     "$FUNC": {
+      "start": {
+       "line": 8,
+       "col": 23,
+       "offset": 112
+      },
+      "end": {
+       "line": 8,
+       "col": 35,
+       "offset": 124
+      },
+      "abstract_content": "check_output"
+     }
+    },
+    "message": "Detected user input entering a `subprocess` call unsafely. This could result in a command injection vulnerability. An attacker could use this vulnerability to execute arbitrary commands on the host, which allows them to download malware, scan sensitive data, or run any command they wish on the server. Do not let users choose the command to run. In general, prefer to use Python API versions of system commands. If you must use subprocess, use a dictionary to allowlist a set of commands.",
+    "metadata": {
+     "category": "security",
+     "technology": [
+      "flask"
+     ],
+     "owasp": [
+      "A01:2017 - Injection",
+      "A03:2021 - Injection"
+     ],
+     "cwe": [
+      "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+     ],
+     "references": [
+      "https://semgrep.dev/docs/cheat-sheets/python-command-injection/"
+     ],
+     "confidence": "HIGH",
+     "cwe2022-top25": true,
+     "cwe2021-top25": true,
+     "subcategory": [
+      "vuln"
+     ],
+     "likelihood": "HIGH",
+     "impact": "MEDIUM"
+    },
+    "severity": "ERROR",
+    "fingerprint": "60db08ec112eb1799c2df102f238c5b3e66f4617a0e2ae785a7c7aacc434e18ae8e5f63240bf9e887f20da146d84fd5c9f1ebbe2e0e2b2dea2831ef4fbbf6fc4_0",
+    "lines": "    return subprocess.check_output(cmd, shell=True)",
+    "is_ignored": false,
+    "validation_state": "NO_VALIDATOR",
+    "dataflow_trace": {
+     "taint_source": [
+      "CliLoc",
+      [
+       {
+        "path": "src/app.py",
+        "start": {
+         "line": 13,
+         "col": 12,
+         "offset": 187
+        },
+        "end": {
+         "line": 13,
+         "col": 36,
+         "offset": 211
+        }
+       },
+       "request.args.get(\"host\")"
+      ]
+     ],
+     "intermediate_vars": [
+      {
+       "location": {
+        "path": "src/app.py",
+        "start": {
+         "line": 13,
+         "col": 5,
+         "offset": 180
+        },
+        "end": {
+         "line": 13,
+         "col": 9,
+         "offset": 184
+        }
+       },
+       "content": "host"
+      }
+     ],
+     "taint_sink": [
+      "CliCall",
+      [
+       [
+        {
+         "path": "src/app.py",
+         "start": {
+          "line": 14,
+          "col": 12,
+          "offset": 223
+         },
+         "end": {
+          "line": 14,
+          "col": 15,
+          "offset": 226
+         }
+        },
+        "run"
+       ],
+       [
+        {
+         "location": {
+          "path": "src/app.py",
+          "start": {
+           "line": 7,
+           "col": 9,
+           "offset": 84
+          },
+          "end": {
+           "line": 7,
+           "col": 12,
+           "offset": 87
+          }
+         },
+         "content": "cmd"
+        }
+       ],
+       [
+        "CliLoc",
+        [
+         {
+          "path": "src/app.py",
+          "start": {
+           "line": 8,
+           "col": 12,
+           "offset": 101
+          },
+          "end": {
+           "line": 8,
+           "col": 52,
+           "offset": 141
+          }
+         },
+         "subprocess.check_output(cmd, shell=True)"
+        ]
+       ]
+      ]
+     ]
+    },
+    "engine_kind": "OSS"
+   }
+  },
+  {
+   "check_id": "opt.code-analysis.opengrep.rulesets.opengrep-rules.python.lang.security.audit.dangerous-subprocess-use-audit",
+   "path": "src/app.py",
+   "start": {
+    "line": 8,
+    "col": 12,
+    "offset": 101
+   },
+   "end": {
+    "line": 8,
+    "col": 52,
+    "offset": 141
+   },
+   "extra": {
+    "metavars": {
+     "$FUNC": {
+      "start": {
+       "line": 8,
+       "col": 23,
+       "offset": 112
+      },
+      "end": {
+       "line": 8,
+       "col": 35,
+       "offset": 124
+      },
+      "abstract_content": "check_output"
+     }
+    },
+    "message": "Detected subprocess function 'check_output' without a static string. If this data can be controlled by a malicious actor, it may be an instance of command injection. Audit the use of this call to ensure it is not controllable by an external resource. You may consider using 'shlex.escape()'.",
+    "metadata": {
+     "owasp": [
+      "A01:2017 - Injection",
+      "A03:2021 - Injection"
+     ],
+     "cwe": [
+      "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+     ],
+     "asvs": {
+      "control_id": "5.3.8 OS Command Injection",
+      "control_url": "https://github.com/OWASP/ASVS/blob/master/4.0/en/0x13-V5-Validation-Sanitization-Encoding.md#v53-output-encoding-and-injection-prevention-requirements",
+      "section": "V5: Validation, Sanitization and Encoding Verification Requirements",
+      "version": "4"
+     },
+     "references": [
+      "https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess",
+      "https://docs.python.org/3/library/subprocess.html",
+      "https://docs.python.org/3/library/shlex.html",
+      "https://semgrep.dev/docs/cheat-sheets/python-command-injection/"
+     ],
+     "category": "security",
+     "technology": [
+      "python"
+     ],
+     "confidence": "LOW",
+     "cwe2022-top25": true,
+     "cwe2021-top25": true,
+     "subcategory": [
+      "audit"
+     ],
+     "likelihood": "LOW",
+     "impact": "HIGH"
+    },
+    "severity": "ERROR",
+    "fingerprint": "49a59fc30ff2f8e8f72fec30114400c8279d103c7f556f852f14d972d46387813a6361fd587bd1f9aafe6517d0867324fca7a99131442443403a25afd4c318d0_0",
+    "lines": "    return subprocess.check_output(cmd, shell=True)",
+    "is_ignored": false,
+    "validation_state": "NO_VALIDATOR",
+    "engine_kind": "OSS"
+   }
+  },
+  {
+   "check_id": "opt.code-analysis.opengrep.rulesets.opengrep-rules.python.lang.security.dangerous-subprocess-use",
+   "path": "src/app.py",
+   "start": {
+    "line": 8,
+    "col": 36,
+    "offset": 125
+   },
+   "end": {
+    "line": 8,
+    "col": 39,
+    "offset": 128
+   },
+   "extra": {
+    "metavars": {
+     "$FUNC": {
+      "start": {
+       "line": 8,
+       "col": 23,
+       "offset": 112
+      },
+      "end": {
+       "line": 8,
+       "col": 35,
+       "offset": 124
+      },
+      "abstract_content": "check_output"
+     },
+     "$CMD": {
+      "start": {
+       "line": 8,
+       "col": 36,
+       "offset": 125
+      },
+      "end": {
+       "line": 8,
+       "col": 39,
+       "offset": 128
+      },
+      "abstract_content": "cmd"
+     }
+    },
+    "message": "Detected subprocess function 'check_output' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.escape()'.",
+    "metadata": {
+     "owasp": [
+      "A01:2017 - Injection",
+      "A03:2021 - Injection"
+     ],
+     "cwe": [
+      "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+     ],
+     "asvs": {
+      "control_id": "5.3.8 OS Command Injection",
+      "control_url": "https://github.com/OWASP/ASVS/blob/master/4.0/en/0x13-V5-Validation-Sanitization-Encoding.md#v53-output-encoding-and-injection-prevention-requirements",
+      "section": "V5: Validation, Sanitization and Encoding Verification Requirements",
+      "version": "4"
+     },
+     "references": [
+      "https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess",
+      "https://docs.python.org/3/library/subprocess.html",
+      "https://docs.python.org/3/library/shlex.html",
+      "https://semgrep.dev/docs/cheat-sheets/python-command-injection/"
+     ],
+     "category": "security",
+     "technology": [
+      "python"
+     ],
+     "confidence": "MEDIUM",
+     "cwe2022-top25": true,
+     "cwe2021-top25": true,
+     "subcategory": [
+      "vuln"
+     ],
+     "likelihood": "MEDIUM",
+     "impact": "HIGH"
+    },
+    "severity": "ERROR",
+    "fingerprint": "b016054f8305eeff8a2e9f2153f9fc3561b5d9b907023d925f329f12688804633fca7a21dac33b3cc8fe316ed96fc8b3f2faee39bbd03a96a6ba631cc73c2d74_0",
+    "lines": "    return subprocess.check_output(cmd, shell=True)",
+    "is_ignored": false,
+    "validation_state": "NO_VALIDATOR",
+    "dataflow_trace": {
+     "taint_source": [
+      "CliLoc",
+      [
+       {
+        "path": "src/app.py",
+        "start": {
+         "line": 13,
+         "col": 12,
+         "offset": 187
+        },
+        "end": {
+         "line": 13,
+         "col": 36,
+         "offset": 211
+        }
+       },
+       "request.args.get(\"host\")"
+      ]
+     ],
+     "intermediate_vars": [
+      {
+       "location": {
+        "path": "src/app.py",
+        "start": {
+         "line": 13,
+         "col": 5,
+         "offset": 180
+        },
+        "end": {
+         "line": 13,
+         "col": 9,
+         "offset": 184
+        }
+       },
+       "content": "host"
+      }
+     ],
+     "taint_sink": [
+      "CliCall",
+      [
+       [
+        {
+         "path": "src/app.py",
+         "start": {
+          "line": 14,
+          "col": 12,
+          "offset": 223
+         },
+         "end": {
+          "line": 14,
+          "col": 15,
+          "offset": 226
+         }
+        },
+        "run"
+       ],
+       [
+        {
+         "location": {
+          "path": "src/app.py",
+          "start": {
+           "line": 7,
+           "col": 9,
+           "offset": 84
+          },
+          "end": {
+           "line": 7,
+           "col": 12,
+           "offset": 87
+          }
+         },
+         "content": "cmd"
+        }
+       ],
+       [
+        "CliLoc",
+        [
+         {
+          "path": "src/app.py",
+          "start": {
+           "line": 8,
+           "col": 36,
+           "offset": 125
+          },
+          "end": {
+           "line": 8,
+           "col": 39,
+           "offset": 128
+          }
+         },
+         "cmd"
+        ]
+       ]
+      ]
+     ]
+    },
+    "engine_kind": "OSS"
+   }
+  },
+  {
+   "check_id": "opt.code-analysis.opengrep.rulesets.opengrep-rules.python.lang.security.audit.subprocess-shell-true",
+   "path": "src/app.py",
+   "start": {
+    "line": 8,
+    "col": 47,
+    "offset": 136
+   },
+   "end": {
+    "line": 8,
+    "col": 51,
+    "offset": 140
+   },
+   "extra": {
+    "metavars": {
+     "$FUNC": {
+      "start": {
+       "line": 8,
+       "col": 23,
+       "offset": 112
+      },
+      "end": {
+       "line": 8,
+       "col": 35,
+       "offset": 124
+      },
+      "abstract_content": "check_output"
+     },
+     "$TRUE": {
+      "start": {
+       "line": 8,
+       "col": 47,
+       "offset": 136
+      },
+      "end": {
+       "line": 8,
+       "col": 51,
+       "offset": 140
+      },
+      "abstract_content": "True"
+     }
+    },
+    "message": "Found 'subprocess' function 'check_output' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which makes it much easier for a malicious actor to execute commands. Use 'shell=False' instead.",
+    "fix": "False",
+    "metadata": {
+     "source-rule-url": "https://bandit.readthedocs.io/en/latest/plugins/b602_subprocess_popen_with_shell_equals_true.html",
+     "owasp": [
+      "A01:2017 - Injection",
+      "A03:2021 - Injection"
+     ],
+     "cwe": [
+      "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+     ],
+     "references": [
+      "https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess",
+      "https://docs.python.org/3/library/subprocess.html"
+     ],
+     "category": "security",
+     "technology": [
+      "python"
+     ],
+     "cwe2022-top25": true,
+     "cwe2021-top25": true,
+     "subcategory": [
+      "secure default"
+     ],
+     "likelihood": "HIGH",
+     "impact": "LOW",
+     "confidence": "MEDIUM"
+    },
+    "severity": "ERROR",
+    "fingerprint": "d389ca2163daf0c7eb85de0b6d3b80d3f2f283b317bba26c566a659a8b5ca97f544267d24a10bf1b1b7b546cfdde0c177c30be41b3ae8ee2bdd8eb4b9732aee8_0",
+    "lines": "    return subprocess.check_output(cmd, shell=True)",
+    "is_ignored": false,
+    "validation_state": "NO_VALIDATOR",
+    "engine_kind": "OSS"
+   }
+  }
+ ],
+ "errors": [
+  {
+   "code": 3,
+   "level": "warn",
+   "type": "Syntax error",
+   "message": "Syntax error at line native/broken.c:1:\n `int main( { return 0 \n` was unexpected",
+   "path": "native/broken.c"
+  }
+ ],
+ "paths": {
+  "scanned": [
+   ".semgrepignore",
+   "native/broken.c",
+   "native/copy.cpp",
+   "requirements.txt",
+   "src/app.py"
+  ]
+ },
+ "interfile_languages_used": [],
+ "skipped_rules": []
+}

@@ -83,7 +83,7 @@ def run_linting(
         out(f"  {len(excluded)} generated files are neither formatted nor linted (excluded-files.json)")
     ctx = LintContext(
         project=project,
-        mount_root=_mount_root(project, settings.projects_dir),
+        mount_root=mount_root(project, settings.projects_dir),
         step_dir=step_dir,
         acceptance=acceptance,
         runner=runner,
@@ -129,7 +129,7 @@ def _remove_if_empty(folder: Path) -> None:
         shutil.rmtree(folder)
 
 
-def _mount_root(project: Path, projects_dir: Path | None) -> Path:
+def mount_root(project: Path, projects_dir: Path | None) -> Path:
     """The git root if it lies inside PROJECTS_DIR (tools then see .git), else the project."""
     top = git_toplevel(project)
     if top is None:

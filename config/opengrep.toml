@@ -1,0 +1,75 @@
+# OpenGrep rule sets (step 3). Definition: docs/staticAnalysis/README.md
+#
+# OpenGrep ships no rules; it runs the rule sets listed in `rulesets` below.
+# Only these active rule sets are downloaded into the image
+# code-analysis/opengrep; the other definitions are not downloaded. After
+# changing `rulesets`, adding a rule set or changing a commit, rebuild the image:
+#   docker compose -f docker/docker-compose.yml --profile tools build opengrep
+# (The scheduler stops with this hint if the image doesn't match this file.)
+#
+# A rule set is a git repository at a fixed commit. `folders` maps each
+# language of step 1 (C, C++, C#, Java, JavaScript, TypeScript, Python, Rust)
+# to the rule folders of the repository that cover it; languages without an
+# entry get no rules from that set. `exclude` lists rule files (relative to the
+# repository) that are left out, e.g. because OpenGrep rejects them.
+#
+# The rules are only stored in the local Docker image, never in this
+# repository: some licenses forbid distributing them (semgrep-rules: "This
+# license does not allow you to distribute the rules"). Findings and reports
+# contain the rules' messages and metadata, so results produced with such
+# rules must not be published either (see docs/staticAnalysis/README.md).
+
+[opengrep]
+# Active rule sets. To use Semgrep's current rules instead of the OpenGrep
+# fork, replace "opengrep-rules" with "semgrep-rules" and rebuild the image.
+# This downloads them, which means accepting their license.
+rulesets = ["semgrep-rules", "0xdea-semgrep-rules"]
+
+# Fork of semgrep-rules from December 13, 2024 (archived, no further changes).
+[rulesets.opengrep-rules]
+repository = "https://github.com/opengrep/opengrep-rules"
+commit = "f1d2b562b414783763fd02a6ed2736eaed622efa"
+license = "LGPL-2.1 with Commons Clause"
+exclude = []
+
+[rulesets.opengrep-rules.folders]
+C = ["c"]
+"C#" = ["csharp"]
+Java = ["java"]
+# Most rules in javascript/ cover TypeScript too; typescript/ adds TS-only rules.
+JavaScript = ["javascript", "typescript"]
+TypeScript = ["javascript", "typescript"]
+Python = ["python"]
+Rust = ["rust"]
+
+# Semgrep's own rules, not active by default. License: Semgrep Rules License
+# v1.0 (semgrep.dev/legal/rules-license): "By using the rules, you agree to all
+# of the terms", "You may use the rules only for your own internal business
+# purposes", no distribution, no use as a service for others.
+[rulesets.semgrep-rules]
+repository = "https://github.com/semgrep/semgrep-rules"
+commit = "a5ad1714f00c9f7fde980cab0ea1d6dc6d414fd2"
+license = "Semgrep Rules License v1.0"
+exclude = []
+
+[rulesets.semgrep-rules.folders]
+C = ["c"]
+"C#" = ["csharp"]
+Java = ["java"]
+JavaScript = ["javascript", "typescript"]
+TypeScript = ["javascript", "typescript"]
+Python = ["python"]
+Rust = ["rust"]
+
+# C and C++ rules by Marco Ivaldi; every rule covers both languages. Neither
+# opengrep-rules nor semgrep-rules has rules for C++ files. The folder noisy/
+# is left out.
+[rulesets.0xdea-semgrep-rules]
+repository = "https://github.com/0xdea/semgrep-rules"
+commit = "b9942606d3543e3145a95332e6543fb79a01af00"
+license = "MIT"
+exclude = []
+
+[rulesets.0xdea-semgrep-rules.folders]
+C = ["rules/c"]
+"C++" = ["rules/c"]

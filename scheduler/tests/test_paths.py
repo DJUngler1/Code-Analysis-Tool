@@ -59,8 +59,15 @@ def test_path_outside_projects_dir_is_rejected(tmp_path):
 
 
 def test_settings_from_env(tmp_path):
-    loaded = Settings.from_env(
-        {"PROJECTS_DIR": str(tmp_path), "HOST_HOME": "/Users/me", "OLLAMA_BASE_URL": "http://ollama:11434/"}
-    )
-    assert loaded == Settings(tmp_path.resolve(), Path("/Users/me"), "http://ollama:11434")
+    loaded = Settings.from_env({
+        "PROJECTS_DIR": str(tmp_path), "HOST_HOME": "/Users/me", "OLLAMA_BASE_URL": "http://ollama:11434/",
+        "CONFIG_DIR": "/app/config",
+    })
+    assert loaded == Settings(tmp_path.resolve(), Path("/Users/me"), "http://ollama:11434",
+                              config_dir=Path("/app/config"))
     assert Settings.from_env({}).projects_dir is None
+
+
+def test_config_dir_defaults_to_the_repository_folder():
+    # Running from the source tree: the repository's config/ folder.
+    assert Settings.from_env({}).config_dir == Path(__file__).resolve().parents[2] / "config"

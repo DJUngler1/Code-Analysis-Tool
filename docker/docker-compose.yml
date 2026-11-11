@@ -9,8 +9,9 @@
 #
 # After `up` the scheduler container idles. Each `bin/code-analysis` runs the
 # tool inside it via `docker exec`; the container keeps running afterwards.
-# For every linter/formatter run, the scheduler starts a fresh container from
-# one of the lint-* images (profile "tools") through the Docker socket.
+# For every linter/formatter run (step 2) and every analysis tool run (step 3),
+# the scheduler starts a fresh container from one of the tool images (profile
+# "tools") through the Docker socket.
 
 name: code-analysis
 
@@ -37,6 +38,7 @@ services:
       PROJECTS_DIR: ${PROJECTS_DIR}
       OUTPUT_DIR: ${OUTPUT_DIR}
       HOST_HOME: ${HOME}
+      CONFIG_DIR: /app/config
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
       # Mounted read-write at the same absolute path as on the host, so host
@@ -51,6 +53,12 @@ services:
         target: ${OUTPUT_DIR}
         bind:
           create_host_path: true
+      # Tool configuration (config/opengrep.toml: OpenGrep's rule sets), read
+      # at each run: changes need no rebuild of the scheduler.
+      - type: bind
+        source: ../config
+        target: /app/config
+        read_only: true
       # Starts the tool containers. Project code (build scripts, analyzers)
       # only runs in those containers, which do not get the socket.
       - type: bind
@@ -90,6 +98,16 @@ services:
     profiles: ["tools"]
     build: linters/rust
     image: code-analysis/lint-rust:latest
+
+  # Static analysis (step 3). OpenGrep with the rule sets of
+  # config/opengrep.toml built in; rebuild after changing rule set definitions.
+  # Definition: docs/staticAnalysis/README.md
+  opengrep:
+    profiles: ["tools"]
+    build:
+      context: ..
+      dockerfile: docker/static-analysis/opengrep/Dockerfile
+    image: code-analysis/opengrep:latest
 
 networks:
   # Shared network for the scheduler and the analysis tool containers

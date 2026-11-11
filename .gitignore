@@ -1,3 +1,8 @@
+# Rule sets of the static analysis (step 3) live only in the local OpenGrep
+# image. Never commit local copies: the Semgrep Rules License v1.0 does not
+# allow distributing semgrep-rules (see docs/staticAnalysis/README.md).
+semgrep-rules/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

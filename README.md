@@ -16,7 +16,7 @@ Requirements: Docker (Docker Desktop on macOS/Windows) and, for the LLM evaluati
    In `docker/.env`, set:
    - `PROJECTS_DIR` to the folder that contains your projects. It is mounted **read-write** at the same path inside the container, so you can paste host paths unchanged. Only projects below this folder can be analyzed.
    - `OUTPUT_DIR` to the folder for the results, outside your projects. It is created if missing.
-2. Build the linter/formatter images (once, and again after changes in `docker/linters/`). This downloads the toolchains (about 5 GB):
+2. Build the tool images: linters/formatters and OpenGrep. Do this once, and again after changes in `docker/linters/`, `docker/static-analysis/` or the rule sets in `config/opengrep.toml`. It downloads the toolchains (about 5 GB):
    ```sh
    docker compose -f docker/docker-compose.yml --profile tools build
    ```
@@ -50,12 +50,13 @@ Language shares are bytes of source code per language, as on GitHub. A `.h` file
 
 | Exit code | Meaning |
 |---|---|
-| 0 | Project accepted (and, without `--check-only`, step 2 completed) |
+| 0 | Project accepted (and, without `--check-only`, steps 2 and 3 completed) |
 | 1 | Invalid input or no project selected |
 | 2 | Language not supported, or no source code found |
 | 3 | No package manager found for the primary language |
 | 4 | Not a git repository, or uncommitted changes |
 | 5 | Step 2 incomplete: `OUTPUT_DIR`, Docker or a tool image missing, a tool failed, or a project file could not be moved back |
+| 6 | Step 3 incomplete: `config/opengrep.toml` invalid, the OpenGrep image missing or outdated, or OpenGrep failed |
 | 125 | (`bin/code-analysis` only) Docker or the container is not running |
 
 ### Linters and formatters (step 2)
@@ -77,6 +78,26 @@ After the project is accepted, the tool runs a fixed formatter and linter per la
 | `step2-linting/<language>/<tool>/` | Raw output of each tool (SARIF reports, stdout/stderr) and the tool's own `changes.patch` |
 | `step2-linting/cpp-build/` | C/C++ only: the CMake build folder generated for `compile_commands.json` |
 
+### Static code analysis (step 3)
+
+After step 2, OpenGrep scans the project for vulnerabilities, as defined in [docs/staticAnalysis/README.md](docs/staticAnalysis/README.md). SonarQube follows later and will run in parallel with it. Step 3 also runs when a tool of step 2 failed.
+
+- **Rules:** OpenGrep ships no rules. The rule sets are defined in [`config/opengrep.toml`](config/opengrep.toml):
+  - `opengrep-rules`, the OpenGrep fork of the Semgrep rules, is active;
+  - `0xdea-semgrep-rules` covers C and C++ and is active too;
+  - `semgrep-rules`, Semgrep's current rules, is defined but not active and not downloaded. Its license must be accepted consciously, and results produced with it must not be published (see [Licenses](docs/staticAnalysis/README.md#licenses)).
+
+  To switch, edit `rulesets` in that file and rebuild the OpenGrep image (`docker compose -f docker/docker-compose.yml --profile tools build opengrep`). Only active rule sets are downloaded. A new rule set needs a `[rulesets.<name>]` entry. The rules are stored only in the local image, never in this repository.
+- **What it scans:** the working tree as step 2 left it, with the files git knows. OpenGrep's own default ignore list applies (e.g. `tests/`, `build/`, `vendor/`, `node_modules/`), and the project's `.semgrepignore` is ignored. With `--taint-intrafile`, OpenGrep follows data across functions within a file, not across files.
+- **How it runs:** in a fresh container of `code-analysis/opengrep`, without network and with the project mounted read-only, so it cannot change the code.
+- **Results** for step 6 go into the same run folder:
+
+| Path | Content |
+|---|---|
+| `step3-static-analysis/summary.json` | Per tool: version, command, exit code, status (`ok`, `partial`, `failed`, `skipped`), duration, rule sets with commit and license, findings per severity and category, notes |
+| `step3-static-analysis/findings.json` | Findings in one format: tool, rule set, rule, severity, message, language, file, position, category, CWE, OWASP, confidence, likelihood, impact |
+| `step3-static-analysis/opengrep/` | OpenGrep's JSON and SARIF reports, stdout/stderr |
+
 **Docker socket on Linux:** the scheduler needs the group of `/var/run/docker.sock` to start containers. The default (991) fits Docker Desktop. On Linux, set `DOCKER_SOCKET_GID` in `docker/.env` to the output of `stat -c %g /var/run/docker.sock`; the tool prints the right value if it is wrong.
 
 ### Ollama
@@ -85,7 +106,7 @@ The container reaches Ollama at `http://host.docker.internal:11434` (change it w
 
 ### Network
 
-All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The analysis tool containers added in later steps attach to it too.
+All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The OpenGrep container of step 3 has no network: its rules are part of the image.
 
 ### Development
 
@@ -96,7 +117,7 @@ python3 -m venv .venv
 .venv/bin/pytest
 ```
 
-The integration tests of step 2 run the real tool images and are skipped by default. They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
+The integration tests of steps 2 and 3 run the real tool images and are skipped by default. They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
 
 ```sh
 CODE_ANALYSIS_DOCKER_TEST_DIR=~/code-analysis-results/_itest .venv/bin/pytest -m docker

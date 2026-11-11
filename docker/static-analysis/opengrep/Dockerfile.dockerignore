@@ -1,0 +1,5 @@
+# Build context is the repository root; only the rule set config and the
+# build script are needed.
+*
+!config/opengrep.toml
+!docker/static-analysis/opengrep/fetch_rulesets.py

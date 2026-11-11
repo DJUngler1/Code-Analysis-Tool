@@ -1,7 +1,7 @@
 """Start the tool containers through the Docker socket.
 
 Each tool command runs in a fresh container (`docker run --rm`) of the
-language's image. Project and run folder are mounted at the same absolute paths
+tool's image. Project and run folder are mounted at the same absolute paths
 as on the host: the scheduler sees them at those paths too, so it passes them
 on unchanged.
 """
@@ -47,6 +47,8 @@ class ToolRunner(Protocol):
         mounts: Sequence[Path],
         env: Mapping[str, str] | None = None,
         timeout: float,
+        read_only: Sequence[Path] = (),
+        network: str | None = None,
     ) -> CommandResult: ...
 
 
@@ -60,8 +62,12 @@ def build_run_args(
     env: Mapping[str, str] | None,
     user: str,
     network: str,
+    read_only: Sequence[Path] = (),
 ) -> list[str]:
-    """Arguments of `docker run` for one tool command."""
+    """Arguments of `docker run` for one tool command.
+
+    `mounts` are writable, `read_only` mounts can't be changed by the tool.
+    """
     args = [
         "docker", "run", "--rm", "--init",
         "--name", name,
@@ -72,9 +78,17 @@ def build_run_args(
     ]
     for key, value in (env or {}).items():
         args += ["--env", f"{key}={value}"]
-    for path in _unique_mounts(mounts):
-        args += ["--mount", f"type=bind,source={path},target={path}"]
+    writable = _unique_mounts(mounts)
+    # A writable folder inside a read-only one stays a mount of its own.
+    protected = [path for path in _unique_mounts(read_only) if not _inside(path, writable)]
+    for path in sorted([*writable, *protected], key=lambda path: (len(path.parts), str(path))):
+        option = f"type=bind,source={path},target={path}"
+        args += ["--mount", option if path in writable else f"{option},readonly"]
     return [*args, image, *command]
+
+
+def _inside(path: Path, folders: Sequence[Path]) -> bool:
+    return any(path == folder or path.is_relative_to(folder) for folder in folders)
 
 
 def _unique_mounts(mounts: Sequence[Path]) -> list[Path]:
@@ -82,7 +96,7 @@ def _unique_mounts(mounts: Sequence[Path]) -> list[Path]:
     resolved = sorted({Path(path) for path in mounts}, key=lambda path: (len(path.parts), str(path)))
     kept: list[Path] = []
     for path in resolved:
-        if not any(path == parent or path.is_relative_to(parent) for parent in kept):
+        if not _inside(path, kept):
             kept.append(path)
     return kept
 
@@ -134,10 +148,14 @@ class DockerRunner:
         mounts: Sequence[Path],
         env: Mapping[str, str] | None = None,
         timeout: float,
+        read_only: Sequence[Path] = (),
+        network: str | None = None,
     ) -> CommandResult:
+        """Run one command; `network` overrides the runner's network (e.g. "none")."""
         name = f"code-analysis-{image.rsplit('/', 1)[-1].split(':', 1)[0]}-{uuid.uuid4().hex[:8]}"
         args = build_run_args(
-            image, command, name=name, workdir=workdir, mounts=mounts, env=env, user=self.user, network=self.network
+            image, command, name=name, workdir=workdir, mounts=mounts, env=env, user=self.user,
+            network=network or self.network, read_only=read_only,
         )
         started = time.monotonic()
         try:
