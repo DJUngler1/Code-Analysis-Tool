@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from scheduler.linting.files import source_files, write_file_list
+from scheduler.linting.files import write_file_list
 from scheduler.linting.model import Status, ToolOutcome, ToolRun
 from scheduler.linting.reports import files_with_errors, parse_sarif
 from scheduler.linting.session import LintContext, ToolSession, last_lines, run_tool, skipped
@@ -13,6 +13,7 @@ from scheduler.linting.versions import java_version, pmd_language_version
 
 LANGUAGE = "Java"
 IMAGE = "code-analysis/lint-java:latest"
+SUFFIXES = (".java",)
 BUILD_OUTPUT_DIRS = frozenset({"target", "build"})
 PMD_EXIT_PROCESSING_ERROR = 5
 PMD_EXIT_USAGE_ERROR = 2
@@ -20,9 +21,9 @@ XARGS_EXIT_COMMAND_FAILED = 123
 
 
 def run(ctx: LintContext) -> list[ToolRun]:
-    files = source_files(ctx.project, (".java",))
+    files = ctx.own_files(SUFFIXES)  # without generated files
     if not files:
-        reason = "no tracked .java files"
+        reason = "no tracked .java files (generated files are left out)"
         return [skipped(LANGUAGE, "google-java-format", reason), skipped(LANGUAGE, "pmd", reason)]
     return [
         run_tool(ctx, LANGUAGE, "google-java-format", IMAGE, lambda session: _format(session, files)),
@@ -55,10 +56,15 @@ def _pmd(session: ToolSession) -> ToolOutcome:
         else "no Java version found in the build files: PMD's default version"
     ]
     report = session.dir / "pmd.sarif"
+    excludes = [arg for directory in _build_output_dirs(project) for arg in ("--exclude", str(directory))]
+    generated = [project / file for file in session.ctx.excluded.reasons if file.endswith(SUFFIXES)]
+    if generated:
+        exclude_list = session.dir / "generated-files.txt"
+        exclude_list.write_text("".join(f"{path}\n" for path in generated), encoding="utf-8")
+        excludes += ["--exclude-file-list", str(exclude_list)]
 
     def pmd(language_version: str | None):
         report.unlink(missing_ok=True)
-        excludes = [arg for directory in _build_output_dirs(project) for arg in ("--exclude", str(directory))]
         version_args = ["--use-version", language_version] if language_version else []
         return session.run(
             ["pmd", "check", "-d", str(project), *excludes,

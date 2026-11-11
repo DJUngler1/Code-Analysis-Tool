@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from scheduler.linting.files import source_files
 from scheduler.linting.model import Status, ToolOutcome, ToolRun
 from scheduler.linting.reports import files_with_errors, parse_sarif
 from scheduler.linting.session import LintContext, ToolSession, last_lines, run_tool, skipped
@@ -14,8 +13,8 @@ SUFFIXES = (".py", ".pyi")
 
 
 def run(ctx: LintContext) -> list[ToolRun]:
-    if not source_files(ctx.project, SUFFIXES):
-        reason = "no Python files known to git (outside skipped folders)"
+    if not ctx.own_files(SUFFIXES):
+        reason = "no Python files known to git (outside skipped folders, not generated)"
         return [skipped(LANGUAGE, "ruff check", reason), skipped(LANGUAGE, "ruff format", reason)]
     version = python_version(ctx.project, ctx.manifests(LANGUAGE))
     target = ruff_target_version(version)
@@ -64,6 +63,9 @@ def _format(session: ToolSession, state: dict) -> ToolOutcome:
     if result.exit_code == 0:
         return ToolOutcome(Status.OK, notes=tuple(state["notes"]))
     unparsed = files_with_errors(result.stderr, project=session.ctx.project, kind="ruff")
+    if result.exit_code == 2 and unparsed and all(file in session.ctx.excluded for file in unparsed):
+        return ToolOutcome(Status.OK, notes=tuple(state["notes"]))  # only generated files failed
+    unparsed = [file for file in unparsed if file not in session.ctx.excluded]
     if result.exit_code == 2 and unparsed:
         return ToolOutcome(
             Status.PARTIAL,

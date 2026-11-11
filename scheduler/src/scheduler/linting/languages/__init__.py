@@ -15,16 +15,18 @@ class LanguageGroup:
     name: str
     languages: tuple[str, ...]  # language names of step 1
     image: str
+    suffixes: tuple[str, ...]  # files the group's tools work on
     run: Callable[[LintContext], list[ToolRun]]
 
 
 GROUPS = (
-    LanguageGroup(cpp.LANGUAGE, ("C", "C++"), cpp.IMAGE, cpp.run),
-    LanguageGroup(csharp.LANGUAGE, ("C#",), csharp.IMAGE, csharp.run),
-    LanguageGroup(java.LANGUAGE, ("Java",), java.IMAGE, java.run),
-    LanguageGroup(javascript.LANGUAGE, ("JavaScript", "TypeScript"), javascript.IMAGE, javascript.run),
-    LanguageGroup(python.LANGUAGE, ("Python",), python.IMAGE, python.run),
-    LanguageGroup(rust.LANGUAGE, ("Rust",), rust.IMAGE, rust.run),
+    LanguageGroup(cpp.LANGUAGE, ("C", "C++"), cpp.IMAGE, cpp.SUFFIXES, cpp.run),
+    LanguageGroup(csharp.LANGUAGE, ("C#",), csharp.IMAGE, csharp.SUFFIXES, csharp.run),
+    LanguageGroup(java.LANGUAGE, ("Java",), java.IMAGE, java.SUFFIXES, java.run),
+    LanguageGroup(javascript.LANGUAGE, ("JavaScript", "TypeScript"), javascript.IMAGE, javascript.SUFFIXES,
+                  javascript.run),
+    LanguageGroup(python.LANGUAGE, ("Python",), python.IMAGE, python.SUFFIXES, python.run),
+    LanguageGroup(rust.LANGUAGE, ("Rust",), rust.IMAGE, rust.SUFFIXES, rust.run),
 )
 
 

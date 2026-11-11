@@ -11,6 +11,8 @@ from pathlib import Path
 
 from scheduler.acceptance import AcceptanceResult
 from scheduler.linting.docker import ToolRunner
+from scheduler.linting.excluded import ExcludedFiles
+from scheduler.linting.files import source_files
 from scheduler.linting.model import CommandResult, Status, ToolOutcome, ToolRun
 from scheduler.linting.snapshots import Snapshotter
 
@@ -29,10 +31,15 @@ class LintContext:
     snapshots: Snapshotter
     errors: list[str] = field(default_factory=list)
     out: Callable[[str], None] = print
+    excluded: ExcludedFiles = field(default_factory=ExcludedFiles)  # generated files
 
     @property
     def mounts(self) -> list[Path]:
         return [self.mount_root, self.step_dir]
+
+    def own_files(self, suffixes: tuple[str, ...]) -> list[Path]:
+        """The project's source files with these suffixes, without generated files."""
+        return [path for path in source_files(self.project, suffixes) if path not in self.excluded]
 
     def manifests(self, *languages: str) -> list[Path]:
         """Package manager manifests found by step 1, relative to the project."""
@@ -92,6 +99,13 @@ def run_tool(
     except Exception as exc:  # noqa: BLE001 – a broken tool must not stop the others
         (session.dir / "internal-error.txt").write_text(traceback.format_exc(), encoding="utf-8")
         outcome = ToolOutcome(Status.FAILED, notes=(f"internal error: {exc}",))
+    notes = list(outcome.notes)
+    # Tools that work on whole folders also reach generated files.
+    if restored := ctx.excluded.restore_changed(ctx.errors):
+        notes.append(f"changes to {len(restored)} generated file(s) undone")
+    findings = [finding for finding in outcome.findings if finding.file not in ctx.excluded]
+    if dropped := len(outcome.findings) - len(findings):
+        notes.append(f"{dropped} findings in generated files left out")
     after = ctx.snapshots.snapshot()
 
     versions = ctx.runner.image_versions(image)
@@ -106,8 +120,8 @@ def run_tool(
         commands=session.commands,
         duration_seconds=round(time.monotonic() - started, 1),
         changed_files=changed,
-        findings=list(outcome.findings),
-        notes=list(outcome.notes),
+        findings=findings,
+        notes=notes,
         output_dir=session.dir.relative_to(ctx.step_dir).as_posix(),
     )
     ctx.out(f"  {language:<22} {tool:<20} {describe(run)}")

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from scheduler.acceptance.filetree import ProjectFile
+from scheduler.acceptance.generated import exclusion_reason
 
 SUPPORTED_LANGUAGES = ("C", "C++", "C#", "Java", "JavaScript", "TypeScript", "Python", "Rust")
 
@@ -47,20 +49,37 @@ EXTENSION_TO_LANGUAGE = {
     for ext in extensions
 }
 
-# Usually generated or bundled code, not written by the project.
-MAX_FILE_BYTES = 1_000_000
-GENERATED_SUFFIXES = (".min.js", ".d.ts", ".d.mts", ".d.cts")
-
-# Extensions shared with XML formats: Qt translation files (.ts) and tilesets
-# of the Tiled map editor (.tsx). Such files are not TypeScript.
-XML_SUFFIXES = (".ts", ".tsx")
-XML_START = (b"<?xml", b"<!DOCTYPE", b"<TS", b"<tileset")
+# .h is shared by C, C++ and Objective-C. Decided per file with GitHub
+# Linguist's heuristic (heuristics.yml: named patterns "objectivec" and "cpp",
+# otherwise C).
+_OBJECTIVE_C = re.compile(
+    r"^\s*(@(interface|class|protocol|property|end|synchronised|selector|implementation)\b|#import\s+.+\.h[\">])",
+    re.MULTILINE,
+)
+_CPP = re.compile(
+    "|".join(
+        (
+            r"^\s*#\s*include <(cstdint|string|vector|map|list|array|bitset|queue|stack|forward_list"
+            r"|unordered_map|unordered_set|(i|o|io)stream)>",
+            r"^\s*template\s*<",
+            r"^[ \t]*(try|constexpr)",
+            r"^[ \t]*catch\s*\(",
+            r"^[ \t]*(class|(using[ \t]+)?namespace)\s+\w+",
+            r"^[ \t]*(private|public|protected):$",
+            r"__has_cpp_attribute|__cplusplus >",
+            r"std::\w+",
+        )
+    ),
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
 class LanguageReport:
     # Bytes of source code per language, largest first.
     bytes_by_language: Mapping[str, int]
+    # Source files not counted (generated, minified, ...): path -> reason.
+    excluded: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def total_bytes(self) -> int:
@@ -92,37 +111,32 @@ class LanguageReport:
         return self.bytes_by_language.get(language, 0) / total if total else 0.0
 
 
-def detect_languages(files: Iterable[ProjectFile], root: Path | None = None) -> LanguageReport:
-    """Bytes of source code per language. With root, .ts/.tsx files are checked for XML."""
+def detect_languages(files: Iterable[ProjectFile], root: Path) -> LanguageReport:
+    """Bytes of source code per language, without generated files (acceptance/generated.py)."""
     totals: Counter[str] = Counter()
-    header_bytes = 0
+    excluded: dict[str, str] = {}
     for file in files:
-        name = file.path.name.lower()
-        if file.size > MAX_FILE_BYTES or name.endswith(GENERATED_SUFFIXES):
-            continue
         suffix = file.path.suffix.lower()
-        if root is not None and suffix in XML_SUFFIXES and _is_xml(root / file.path):
+        if suffix != ".h" and suffix not in EXTENSION_TO_LANGUAGE:
             continue
-        if suffix == ".h":
-            header_bytes += file.size
-        elif language := EXTENSION_TO_LANGUAGE.get(suffix):
-            totals[language] += file.size
-
-    # .h is shared by C, C++ and Objective-C: attribute it to whichever has sources.
-    if header_bytes:
-        for language in ("C++", "Objective-C", "C"):
-            if totals[language] or language == "C":
-                totals[language] += header_bytes
-                break
+        if reason := exclusion_reason(root / file.path):
+            excluded[file.path.as_posix()] = reason
+            continue
+        language = header_language(root / file.path) if suffix == ".h" else EXTENSION_TO_LANGUAGE[suffix]
+        totals[language] += file.size
 
     ordered = sorted((+totals).items(), key=lambda item: (-item[1], item[0]))
-    return LanguageReport(dict(ordered))
+    return LanguageReport(dict(ordered), excluded)
 
 
-def _is_xml(path: Path) -> bool:
+def header_language(path: Path) -> str:
+    """Objective-C, C++ or C for a .h file (Linguist's heuristic)."""
     try:
-        with path.open("rb") as handle:
-            start = handle.read(256).lstrip(b"\xef\xbb\xbf \t\r\n")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return False
-    return start.startswith(XML_START)
+        return "C"
+    if _OBJECTIVE_C.search(text):
+        return "Objective-C"
+    if _CPP.search(text):
+        return "C++"
+    return "C"

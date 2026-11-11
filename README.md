@@ -46,6 +46,8 @@ A project is accepted when:
 - it uses a package manager for that language, e.g. `pyproject.toml` / `requirements.txt`, `package.json`, `pom.xml` / `build.gradle`, `*.csproj`, `Cargo.toml`; for C/C++ only Conan (`conanfile.txt` / `conanfile.py`) or vcpkg (`vcpkg.json`) count,
 - it is a git repository without uncommitted changes. Later steps (formatter) modify files, so every change must be reviewable and revertible with git.
 
+Language shares are bytes of source code per language, as on GitHub. A `.h` file counts as C, C++ or Objective-C depending on its content (GitHub Linguist's rule). Generated files are not counted (see [Generated files](docs/linterConventions/README.md#generated-files)); the output names how many were left out.
+
 | Exit code | Meaning |
 |---|---|
 | 0 | Project accepted (and, without `--check-only`, step 2 completed) |
@@ -61,6 +63,7 @@ A project is accepted when:
 After the project is accepted, the tool runs a fixed formatter and linter per language, as defined in [docs/linterConventions/README.md](docs/linterConventions/README.md). It covers every supported language found in the project, however small its share (e.g. a single C file in a Java/C++ project). A language is skipped in step 2 only if git knows none of its files (all of them ignored or in vendored/build folders).
 
 - **What changes in the project:** the formatters and automatic fixes change files in the project. The changes stay **uncommitted**: review them with `git diff`, then commit or discard them. Until then, step 1 rejects the project on the next run. Configuration files of the project that the tools would otherwise read (`.editorconfig`, `biome.json`, `.clang-format-ignore`) are moved out during the run and moved back afterwards.
+- **Generated files** (e.g. SWIG or protobuf output, minified JavaScript) are neither formatted nor linted. They are recognised by their content, see [Generated files](docs/linterConventions/README.md#generated-files).
 - **How the tools run:** each tool runs in a fresh container of its language image (`code-analysis/lint-<language>`). The scheduler starts these containers through the Docker socket. Project code that the tools execute, such as build scripts, .NET analyzers or CMake, only runs in those containers, which don't get the socket.
 - **Results** for step 6 are written to `OUTPUT_DIR/<project>/<date_time>Z/` (UTC):
 
@@ -70,6 +73,7 @@ After the project is accepted, the tool runs a fixed formatter and linter per la
 | `step2-linting/summary.json` | One entry per tool: version, commands, exit codes, status (`ok`, `partial`, `failed`, `skipped`), duration, changed files, number of findings, notes |
 | `step2-linting/findings.json` | Findings of all tools in one format: tool, rule, severity, message, file, line, column |
 | `step2-linting/changes.patch` | All changes the tools made to the project |
+| `step2-linting/excluded-files.json` | Generated files that were neither formatted nor linted, each with the reason |
 | `step2-linting/<language>/<tool>/` | Raw output of each tool (SARIF reports, stdout/stderr) and the tool's own `changes.patch` |
 | `step2-linting/cpp-build/` | C/C++ only: the CMake build folder generated for `compile_commands.json` |
 

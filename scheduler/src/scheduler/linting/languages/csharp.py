@@ -12,6 +12,7 @@ from scheduler.linting.session import LintContext, ToolSession, last_lines, run_
 
 LANGUAGE = "C#"
 IMAGE = "code-analysis/lint-dotnet:latest"
+SUFFIXES = (".cs",)
 PROJECT_CONFIGS = (".editorconfig",)
 SOLUTION_SUFFIXES = (".sln", ".slnx")
 # Project settings dotnet format follows and the tool cannot switch off

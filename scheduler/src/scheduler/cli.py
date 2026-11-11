@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -105,6 +106,10 @@ def format_result(result: AcceptanceResult) -> str:
         shown = (report.primary, *report.others)
         languages = ", ".join(f"{language} {percent(report.share(language))}" for language in shown)
         lines.append(f"Languages:        {languages} (primary: {report.primary})")
+    if report.excluded:
+        kinds = Counter(reason.split(":")[0] for reason in report.excluded.values())
+        listed = ", ".join(f"{count} {kind}" for kind, count in kinds.most_common())
+        lines.append(f"Not counted:      {len(report.excluded)} files ({listed}), not linted either")
 
     for language, hits in result.package_managers.items():
         if hits:

@@ -8,7 +8,6 @@ the project's own biome.json/biome.jsonc files are moved out meanwhile.
 
 from __future__ import annotations
 
-from scheduler.linting.files import source_files
 from scheduler.linting.hiding import find_files, hidden_files
 from scheduler.linting.model import Status, ToolOutcome, ToolRun
 from scheduler.linting.reports import parse_sarif
@@ -23,8 +22,9 @@ SUFFIXES = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts")
 
 def run(ctx: LintContext) -> list[ToolRun]:
     # Biome also formats JSON and CSS: without any JS/TS file it must not run.
-    if not source_files(ctx.project, SUFFIXES):
-        return [skipped(LANGUAGE, "biome", "no JavaScript/TypeScript files known to git (outside skipped folders)")]
+    if not ctx.own_files(SUFFIXES):
+        reason = "no JavaScript/TypeScript files known to git (outside skipped folders, not generated)"
+        return [skipped(LANGUAGE, "biome", reason)]
     configs = find_files(ctx.project, PROJECT_CONFIGS)
     with hidden_files(ctx.project, configs, ctx.step_dir / "hidden" / "javascript", ctx.errors):
         return [run_tool(ctx, LANGUAGE, "biome", IMAGE, lambda session: _biome(session, len(configs)))]

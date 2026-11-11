@@ -26,6 +26,7 @@ LANGUAGE = "C/C++"
 IMAGE = "code-analysis/lint-cpp:latest"
 SOURCE_SUFFIXES = (".c", ".cpp", ".cc", ".cxx", ".c++")
 HEADER_SUFFIXES = (".h", ".hpp", ".hh", ".hxx", ".ipp", ".inl", ".tpp")
+SUFFIXES = SOURCE_SUFFIXES + HEADER_SUFFIXES
 STYLE = "{BasedOnStyle: LLVM, ColumnLimit: 100, IndentWidth: 4, AccessModifierOffset: -4, SortIncludes: false}"
 BASE_CHECKS = "-*,bugprone-*,cert-*,clang-analyzer-*,performance-*"
 MODERN_CHECKS = f"{BASE_CHECKS},modernize-*"
@@ -45,9 +46,9 @@ xargs -0 -P "$(nproc)" -I{} clang-tidy --config="$config" {} -- "$@" < "$list"
 
 
 def run(ctx: LintContext) -> list[ToolRun]:
-    files = source_files(ctx.project, SOURCE_SUFFIXES + HEADER_SUFFIXES)
+    files = ctx.own_files(SUFFIXES)  # without generated files
     if not files:
-        reason = "no tracked C/C++ files"
+        reason = "no tracked C/C++ files (generated files are left out)"
         return [skipped(LANGUAGE, "clang-format", reason), skipped(LANGUAGE, "clang-tidy", reason)]
     # clang-format honours .clang-format-ignore even with an inline style.
     ignore_files = find_files(ctx.mount_root, (".clang-format-ignore",))
@@ -92,7 +93,7 @@ def _tidy(session: ToolSession, files: list[Path]) -> ToolOutcome:
         directories = {str(file): Path(entry["directory"]) for file, entry in entries}
     else:
         notes.append("results limited: clang-tidy ran without a compilation database (default flags)")
-        outputs, exit_codes, groups = _tidy_without_database(session, sources, files)
+        outputs, exit_codes, groups = _tidy_without_database(session, sources)
         directories = {}
 
     report = parse_clang_tidy("\n".join(outputs), project=project, directories=directories)
@@ -132,13 +133,12 @@ def _tidy_with_database(session: ToolSession, entries: list[tuple[Path, dict]]):
     return outputs, exit_codes, {key: len(group) for key, group in groups.items()}
 
 
-def _tidy_without_database(session: ToolSession, sources: list[Path], files: list[Path]):
+def _tidy_without_database(session: ToolSession, sources: list[Path]):
     project = session.ctx.project
     script = session.dir / "tidy-without-database.sh"
     script.write_text(FALLBACK_SCRIPT, encoding="utf-8")
-    include_dirs = sorted(
-        {project} | {project / path.parent for path in files if path.suffix.lower() in HEADER_SUFFIXES}
-    )
+    # Generated headers too: the project's own files include them.
+    include_dirs = sorted({project} | {project / path.parent for path in source_files(project, HEADER_SUFFIXES)})
     includes = [f"-I{directory}" for directory in include_dirs]
     groups = {
         "c": [path for path in sources if path.suffix == ".c"],

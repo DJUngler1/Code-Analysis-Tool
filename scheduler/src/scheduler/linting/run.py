@@ -10,6 +10,7 @@ the tools did). Everything else goes into a run folder for step 6:
     summary.json           one entry per tool
     findings.json          normalized findings of all tools
     changes.patch          all changes made by the tools
+    excluded-files.json    generated files, neither formatted nor linted (with the reason)
     <language>/<tool>/     raw output and the tool's own changes.patch
 """
 
@@ -26,6 +27,7 @@ from pathlib import Path
 from scheduler.acceptance import AcceptanceResult
 from scheduler.config import Settings
 from scheduler.linting.docker import DockerError, DockerRunner, ToolRunner
+from scheduler.linting.excluded import ExcludedFiles
 from scheduler.linting.languages import groups_for
 from scheduler.linting.model import LintingResult, ToolRun
 from scheduler.linting.session import LintContext
@@ -67,6 +69,18 @@ def run_linting(
         return result
 
     untracked_before = set(untracked_files(project))
+    suffixes = tuple(suffix for group in groups for suffix in group.suffixes)
+    excluded = ExcludedFiles.detect(project, suffixes, step_dir / "generated-originals")
+    excluded.write_list(step_dir / "excluded-files.json")
+    try:
+        excluded.save()
+    except OSError as exc:
+        snapshots.close()
+        result.errors.append(f"could not copy the generated files before the tools ran: {exc}")
+        _write_results(result, project, started, now(), group_names)
+        return result
+    if len(excluded):
+        out(f"  {len(excluded)} generated files are neither formatted nor linted (excluded-files.json)")
     ctx = LintContext(
         project=project,
         mount_root=_mount_root(project, settings.projects_dir),
@@ -76,6 +90,7 @@ def run_linting(
         snapshots=snapshots,
         errors=result.errors,
         out=out,
+        excluded=excluded,
     )
     try:
         base = snapshots.base()
@@ -89,10 +104,11 @@ def run_linting(
         result.errors.append(f"could not record the changes: {exc}")
     finally:
         snapshots.close()
+        excluded.discard_backup()
 
     _remove_if_empty(step_dir / "hidden")  # all moved-out configuration files are back
     created = sorted(set(untracked_files(project)) - untracked_before)
-    _write_results(result, project, started, now(), group_names, created)
+    _write_results(result, project, started, now(), group_names, created, len(excluded))
     return result
 
 
@@ -133,6 +149,7 @@ def _run_info(acceptance: AcceptanceResult, started: datetime) -> dict:
             "primary": languages.primary,
             "others": list(languages.others),
             "shares": {language: round(languages.share(language), 4) for language in languages.bytes_by_language},
+            "not_counted_files": len(languages.excluded),  # generated, minified, ...
         },
         "package_managers": {
             language: [{"manager": hit.manager, "manifest": hit.manifest.as_posix()} for hit in hits]
@@ -148,6 +165,7 @@ def _write_results(
     finished: datetime,
     languages: list[str],
     created_files: list[str] | None = None,
+    excluded_files: int = 0,
 ) -> None:
     assert result.run_dir is not None
     step_dir = result.run_dir / STEP_DIR
@@ -163,6 +181,8 @@ def _write_results(
         # Untracked files the tools created, e.g. build output that is not
         # covered by .gitignore (obj/, target/). Not part of changes.patch.
         "created_files": created_files or [],
+        # Generated files: neither formatted nor linted, listed in excluded-files.json.
+        "excluded_files": excluded_files,
         "tools": [_tool_summary(run) for run in result.tool_runs],
     }
     _write_json(step_dir / "summary.json", summary)

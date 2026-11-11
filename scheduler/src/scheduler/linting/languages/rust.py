@@ -15,6 +15,7 @@ from scheduler.linting.session import LintContext, ToolSession, last_lines, run_
 
 LANGUAGE = "Rust"
 IMAGE = "code-analysis/lint-rust:latest"
+SUFFIXES = (".rs",)
 CLIPPY_ENV = {"CLIPPY_CONF_DIR": "/opt/code-analysis/clippy"}
 RUSTFMT_CONFIG_DIR = "/opt/code-analysis/rustfmt"
 CLIPPY_TIMEOUT_SECONDS = 60 * 60
