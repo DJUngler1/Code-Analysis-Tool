@@ -14,18 +14,17 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from scheduler.acceptance import AcceptanceResult
-from scheduler.acceptance.languages import EXTENSION_TO_LANGUAGE, header_language
-from scheduler.linting.docker import ToolRunner
+from scheduler.linting.docker import DockerError
 from scheduler.linting.model import Status
 from scheduler.linting.reports import relative_file
 from scheduler.linting.session import last_lines
+from scheduler.static_analysis.context import AnalysisContext, language_of
 from scheduler.static_analysis.model import AnalysisFinding, AnalysisRun
-from scheduler.static_analysis.rulesets import OpenGrepConfig, RuleSet
+from scheduler.static_analysis.rulesets import RuleSet, RulesetError, load_config
 
 TOOL = "opengrep"
 IMAGE = "code-analysis/opengrep:latest"
@@ -47,24 +46,6 @@ _SUMMARY = re.compile(r"Ran (?P<rules>\d+) rules? on (?P<files>\d+) files?")
 
 
 @dataclass
-class ScanContext:
-    project: Path
-    # Mounted read-only: the git repository root if the project is a subfolder
-    # of one (inside PROJECTS_DIR), otherwise the project.
-    mount_root: Path
-    step_dir: Path  # <run>/step3-static-analysis
-    acceptance: AcceptanceResult
-    runner: ToolRunner
-    config: OpenGrepConfig
-    out: Callable[[str], None] = print
-
-    @property
-    def languages(self) -> tuple[str, ...]:
-        report = self.acceptance.languages
-        return (report.primary or "", *report.supported_others)
-
-
-@dataclass
 class OpenGrepReport:
     findings: list[AnalysisFinding]
     # Files OpenGrep could not (fully) analyse and other errors it reported.
@@ -73,17 +54,22 @@ class OpenGrepReport:
     files_scanned: int | None
 
 
-def run_opengrep(ctx: ScanContext) -> AnalysisRun:
-    languages = [language for language in ctx.languages if language]
-    used = [(ruleset, ruleset.folders_for(languages)) for ruleset in ctx.config.active]
+def run_opengrep(ctx: AnalysisContext) -> AnalysisRun:
+    try:
+        config = load_config(ctx.settings.config_dir)
+        ctx.runner.ensure_image(IMAGE)
+    except (RulesetError, DockerError) as exc:
+        return AnalysisRun(tool=TOOL, status=Status.FAILED, notes=[str(exc)])
+    languages = list(ctx.languages)
+    used = [(ruleset, ruleset.folders_for(languages)) for ruleset in config.active]
     run = AnalysisRun(
         tool=TOOL,
         status=Status.SKIPPED,
         rulesets=[_ruleset_info(ruleset, folders) for ruleset, folders in used if folders],
     )
     uncovered = [language for language in languages if not any(ruleset.folders_for([language])
-                                                                for ruleset in ctx.config.active)]
-    names = ", ".join(ruleset.name for ruleset in ctx.config.active)
+                                                                for ruleset in config.active)]
+    names = ", ".join(ruleset.name for ruleset in config.active)
     if uncovered:
         run.notes.append(f"no rules for {', '.join(uncovered)} in the active rule sets ({names})")
     if not run.rulesets:
@@ -102,9 +88,9 @@ def run_opengrep(ctx: ScanContext) -> AnalysisRun:
             problems.append(f"{', '.join(missing)} not in the image (rule sets are only downloaded "
                             "while they are active, when the image is built)")
         if outdated:
-            problems.append(f"{', '.join(outdated)} in the image at another commit than in {ctx.config.path.name}")
+            problems.append(f"{', '.join(outdated)} in the image at another commit than in {config.path.name}")
         run.notes.append(
-            f"the image {IMAGE} does not match {ctx.config.path.name}: {'; '.join(problems)}. "
+            f"the image {IMAGE} does not match {config.path.name}: {'; '.join(problems)}. "
             f"Rebuilding downloads the active rule sets, which means accepting their licenses:\n  {BUILD_HINT}"
         )
         return run
@@ -198,7 +184,7 @@ def parse_report(
                 severity=_SEVERITIES.get(tool_severity, "warning"),
                 tool_severity=tool_severity,
                 message=str(extra.get("message", "")).strip(),
-                language=_language(file, project),
+                language=language_of(file, project),
                 file=file,
                 line=start.get("line"),
                 column=start.get("col"),
@@ -253,16 +239,6 @@ def _split_rule_id(check_id: str, prefixes: list[tuple[str, str]]) -> tuple[str 
         if check_id.startswith(prefix):
             return name, check_id[len(prefix):]
     return None, check_id
-
-
-def _language(file: str | None, project: Path) -> str | None:
-    if file is None:
-        return None
-    suffix = Path(file).suffix.lower()
-    if suffix == ".h":
-        path = project / file
-        return header_language(path) if path.is_file() else "C/C++"
-    return EXTENSION_TO_LANGUAGE.get(suffix)
 
 
 def _text(value: object) -> str | None:

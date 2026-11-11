@@ -16,15 +16,16 @@ Requirements: Docker (Docker Desktop on macOS/Windows) and, for the LLM evaluati
    In `docker/.env`, set:
    - `PROJECTS_DIR` to the folder that contains your projects. It is mounted **read-write** at the same path inside the container, so you can paste host paths unchanged. Only projects below this folder can be analyzed.
    - `OUTPUT_DIR` to the folder for the results, outside your projects. It is created if missing.
-2. Build the tool images: linters/formatters and OpenGrep. Do this once, and again after changes in `docker/linters/`, `docker/static-analysis/` or the rule sets in `config/opengrep.toml`. It downloads the toolchains (about 5 GB):
+   - `SONARQUBE_ADMIN_PASSWORD` and `SONARQUBE_DB_PASSWORD` for SonarQube (step 3). The admin password needs at least 12 characters with an uppercase and a lowercase letter, a digit and a special character. The tool sets it on SonarQube's first start; you log in with it at http://localhost:9000.
+2. Build the tool images: linters/formatters, OpenGrep and the SonarQube scanners. Do this once, and again after changes in `docker/linters/`, `docker/static-analysis/` or the rule sets in `config/opengrep.toml`. It downloads the toolchains (about 5 GB):
    ```sh
    docker compose -f docker/docker-compose.yml --profile tools build
    ```
-3. Build and start the container (from the repository root):
+3. Build and start the containers (from the repository root):
    ```sh
    docker compose -f docker/docker-compose.yml up -d --build
    ```
-   The container starts and waits; nothing is analyzed yet.
+   The scheduler container starts and waits; nothing is analyzed yet. The SonarQube server and its database start too and keep running. SonarQube needs at least 4 GB of RAM (give Docker Desktop enough memory). On Linux it also needs `sudo sysctl -w vm.max_map_count=524288` and `sudo sysctl -w fs.file-max=131072` (see SonarQube's Linux pre-installation guide).
 4. Run the tool, from any terminal and as often as you like:
    ```sh
    bin/code-analysis
@@ -32,7 +33,7 @@ Requirements: Docker (Docker Desktop on macOS/Windows) and, for the LLM evaluati
    It asks for the project path and runs the analysis inside the container. The container keeps running afterwards for the next run. To skip the prompt, pass the path: `bin/code-analysis --path /path/to/project`. To only check whether a project is accepted, without changing anything, add `--check-only`.
 
    To call it from anywhere as `code-analysis`, link the script into a folder on your `PATH`, e.g. `ln -s "$PWD/bin/code-analysis" ~/.local/bin/code-analysis`. Without the script (e.g. on Windows): `docker exec -it code-analysis-scheduler code-analysis`.
-5. Stop the container when you are done:
+5. Stop the containers when you are done (SonarQube's data stays in Docker volumes; `down -v` would delete it):
    ```sh
    docker compose -f docker/docker-compose.yml down
    ```
@@ -56,7 +57,7 @@ Language shares are bytes of source code per language, as on GitHub. A `.h` file
 | 3 | No package manager found for the primary language |
 | 4 | Not a git repository, or uncommitted changes |
 | 5 | Step 2 incomplete: `OUTPUT_DIR`, Docker or a tool image missing, a tool failed, or a project file could not be moved back |
-| 6 | Step 3 incomplete: `config/opengrep.toml` invalid, the OpenGrep image missing or outdated, or OpenGrep failed |
+| 6 | Step 3 incomplete: OpenGrep or SonarQube failed, e.g. `config/opengrep.toml` invalid, a tool image missing or outdated, the SonarQube server not running or `SONARQUBE_ADMIN_PASSWORD` missing |
 | 125 | (`bin/code-analysis` only) Docker or the container is not running |
 
 ### Linters and formatters (step 2)
@@ -80,23 +81,34 @@ After the project is accepted, the tool runs a fixed formatter and linter per la
 
 ### Static code analysis (step 3)
 
-After step 2, OpenGrep scans the project for vulnerabilities, as defined in [docs/staticAnalysis/README.md](docs/staticAnalysis/README.md). SonarQube follows later and will run in parallel with it. Step 3 also runs when a tool of step 2 failed.
+After step 2, OpenGrep and SonarQube Community Build analyse the project in parallel, as defined in [docs/staticAnalysis/README.md](docs/staticAnalysis/README.md). Step 3 also runs when a tool of step 2 failed, and each tool runs even if the other fails.
 
-- **Rules:** OpenGrep ships no rules. The rule sets are defined in [`config/opengrep.toml`](config/opengrep.toml):
-  - `opengrep-rules`, the OpenGrep fork of the Semgrep rules, is active;
-  - `0xdea-semgrep-rules` covers C and C++ and is active too;
-  - `semgrep-rules`, Semgrep's current rules, is defined but not active and not downloaded. Its license must be accepted consciously, and results produced with it must not be published (see [Licenses](docs/staticAnalysis/README.md#licenses)).
+**OpenGrep** searches for vulnerabilities with rule sets.
+- **Rules:** OpenGrep ships no rules. The rule sets are defined in [`config/opengrep.toml`](config/opengrep.toml), and `rulesets` there lists the active ones:
+  - `opengrep-rules`, the OpenGrep fork of the Semgrep rules;
+  - `semgrep-rules`, Semgrep's current rules. Results produced with them must not be published (see [Licenses](docs/staticAnalysis/README.md#licenses)).
+  - `0xdea-semgrep-rules`, for C and C++.
 
   To switch, edit `rulesets` in that file and rebuild the OpenGrep image (`docker compose -f docker/docker-compose.yml --profile tools build opengrep`). Only active rule sets are downloaded. A new rule set needs a `[rulesets.<name>]` entry. The rules are stored only in the local image, never in this repository.
 - **What it scans:** the working tree as step 2 left it, with the files git knows. OpenGrep's own default ignore list applies (e.g. `tests/`, `build/`, `vendor/`, `node_modules/`), and the project's `.semgrepignore` is ignored. With `--taint-intrafile`, OpenGrep follows data across functions within a file, not across files.
 - **How it runs:** in a fresh container of `code-analysis/opengrep`, without network and with the project mounted read-only, so it cannot change the code.
-- **Results** for step 6 go into the same run folder:
+
+**SonarQube** finds bugs, code smells, vulnerabilities and duplications, and measures the code (lines, complexity).
+- **Server:** SonarQube Community Build 26.9 with PostgreSQL, started by `up -d`. Its web interface at http://localhost:9000 shows each analysed project with its history (user `admin`, `SONARQUBE_ADMIN_PASSWORD`).
+- **Languages:**
+  - C#, Java, JavaScript, TypeScript, Python and Rust use the official analyzers.
+  - C and C++ use the community plugin sonar-cxx. Its own default profile activates no rule, so the tool uses the profile "Sonar way + sonar-cxx rules": the plugin's 22 own rules (complexity, size, naming, layout), without `cxx:FileHeader`, which reported every file. They find maintainability problems, not bugs; those come from clang-tidy (step 2) and OpenGrep.
+- **Rules:** the default quality profile "Sonar way" of each language (C/C++: see above). The project's `sonar-project.properties` is ignored, and so are the folders and generated files that steps 1 and 2 leave out.
+- **How it runs:** the scanners (`code-analysis/sonar-scanner`, `code-analysis/sonar-dotnet`) work on a copy of the project in the run folder, so the project is not changed. Java projects are compiled first with their Maven or Gradle, because SonarQube's Java analysis needs the bytecode. Projects with C# are analysed during `dotnet build`. If a build fails, the language is analysed with less precision or not at all, and the status is `partial`.
+
+**Results** for step 6 go into the same run folder:
 
 | Path | Content |
 |---|---|
-| `step3-static-analysis/summary.json` | Per tool: version, command, exit code, status (`ok`, `partial`, `failed`, `skipped`), duration, rule sets with commit and license, findings per severity and category, notes |
-| `step3-static-analysis/findings.json` | Findings in one format: tool, rule set, rule, severity, message, language, file, position, category, CWE, OWASP, confidence, likelihood, impact |
+| `step3-static-analysis/summary.json` | Per tool: version, commands, exit codes, status (`ok`, `partial`, `failed`, `skipped`), duration, rule sets or quality profiles, findings per severity and category, SonarQube's metrics and duplicated files, notes |
+| `step3-static-analysis/findings.json` | Findings of both tools in one format: tool, rule set, rule, severity, message, language, file, position, category, CWE, OWASP, confidence, likelihood, impact |
 | `step3-static-analysis/opengrep/` | OpenGrep's JSON and SARIF reports, stdout/stderr |
+| `step3-static-analysis/sonarqube/` | SonarQube's scanner parameters and logs, and the Web API answers (`api/`: issues, hotspots, metrics, duplications, rules) |
 
 **Docker socket on Linux:** the scheduler needs the group of `/var/run/docker.sock` to start containers. The default (991) fits Docker Desktop. On Linux, set `DOCKER_SOCKET_GID` in `docker/.env` to the output of `stat -c %g /var/run/docker.sock`; the tool prints the right value if it is wrong.
 
@@ -106,7 +118,7 @@ The container reaches Ollama at `http://host.docker.internal:11434` (change it w
 
 ### Network
 
-All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The OpenGrep container of step 3 has no network: its rules are part of the image.
+All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The OpenGrep container of step 3 has no network: its rules are part of the image. The SonarQube scanners use the network to reach the server (`http://sonarqube:9000`) and, for builds, the dependencies. The SonarQube server is published only on `127.0.0.1:9000`.
 
 ### Development
 
@@ -117,7 +129,7 @@ python3 -m venv .venv
 .venv/bin/pytest
 ```
 
-The integration tests of steps 2 and 3 run the real tool images and are skipped by default. They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
+The integration tests of steps 2 and 3 run the real tool images and are skipped by default. The SonarQube tests also need the running server (`up -d`) and `SONARQUBE_ADMIN_PASSWORD` (environment or `docker/.env`). They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
 
 ```sh
 CODE_ANALYSIS_DOCKER_TEST_DIR=~/code-analysis-results/_itest .venv/bin/pytest -m docker

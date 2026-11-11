@@ -1,0 +1,188 @@
+[
+ {
+  "key": "code-analysis_sq-multi:src/app.py",
+  "name": "app.py",
+  "qualifier": "FIL",
+  "path": "src/app.py",
+  "language": "py",
+  "measures": [
+   {
+    "metric": "cognitive_complexity",
+    "value": "8",
+    "bestValue": false
+   },
+   {
+    "metric": "complexity",
+    "value": "7"
+   },
+   {
+    "metric": "ncloc",
+    "value": "21"
+   }
+  ]
+ },
+ {
+  "key": "code-analysis_sq-multi:native/copy.cpp",
+  "name": "copy.cpp",
+  "qualifier": "FIL",
+  "path": "native/copy.cpp",
+  "language": "cxx",
+  "measures": [
+   {
+    "metric": "cognitive_complexity",
+    "value": "2",
+    "bestValue": false
+   },
+   {
+    "metric": "complexity",
+    "value": "2"
+   },
+   {
+    "metric": "ncloc",
+    "value": "6"
+   }
+  ]
+ },
+ {
+  "key": "code-analysis_sq-multi:src/crypto.py",
+  "name": "crypto.py",
+  "qualifier": "FIL",
+  "path": "src/crypto.py",
+  "language": "py",
+  "measures": [
+   {
+    "metric": "complexity",
+    "value": "2"
+   },
+   {
+    "metric": "ncloc",
+    "value": "7"
+   }
+  ]
+ },
+ {
+  "key": "code-analysis_sq-multi:src/dup_a.py",
+  "name": "dup_a.py",
+  "qualifier": "FIL",
+  "path": "src/dup_a.py",
+  "language": "py",
+  "measures": [
+   {
+    "metric": "cognitive_complexity",
+    "value": "8",
+    "bestValue": false
+   },
+   {
+    "metric": "complexity",
+    "value": "4"
+   },
+   {
+    "metric": "duplicated_blocks",
+    "value": "1",
+    "bestValue": false
+   },
+   {
+    "metric": "duplicated_lines",
+    "value": "13",
+    "bestValue": false
+   },
+   {
+    "metric": "ncloc",
+    "value": "14"
+   }
+  ]
+ },
+ {
+  "key": "code-analysis_sq-multi:src/dup_b.py",
+  "name": "dup_b.py",
+  "qualifier": "FIL",
+  "path": "src/dup_b.py",
+  "language": "py",
+  "measures": [
+   {
+    "metric": "cognitive_complexity",
+    "value": "8",
+    "bestValue": false
+   },
+   {
+    "metric": "complexity",
+    "value": "4"
+   },
+   {
+    "metric": "duplicated_blocks",
+    "value": "1",
+    "bestValue": false
+   },
+   {
+    "metric": "duplicated_lines",
+    "value": "13",
+    "bestValue": false
+   },
+   {
+    "metric": "ncloc",
+    "value": "14"
+   }
+  ]
+ },
+ {
+  "key": "code-analysis_sq-multi:native/main.c",
+  "name": "main.c",
+  "qualifier": "FIL",
+  "path": "native/main.c",
+  "language": "cxx",
+  "measures": [
+   {
+    "metric": "complexity",
+    "value": "1"
+   },
+   {
+    "metric": "ncloc",
+    "value": "1"
+   }
+  ]
+ },
+ {
+  "key": "code-analysis_sq-multi:rs/src/main.rs",
+  "name": "main.rs",
+  "qualifier": "FIL",
+  "path": "rs/src/main.rs",
+  "language": "rust",
+  "measures": [
+   {
+    "metric": "cognitive_complexity",
+    "value": "1",
+    "bestValue": false
+   },
+   {
+    "metric": "complexity",
+    "value": "2"
+   },
+   {
+    "metric": "ncloc",
+    "value": "4"
+   }
+  ]
+ },
+ {
+  "key": "code-analysis_sq-multi:web/server.ts",
+  "name": "server.ts",
+  "qualifier": "FIL",
+  "path": "web/server.ts",
+  "language": "ts",
+  "measures": [
+   {
+    "metric": "cognitive_complexity",
+    "value": "1",
+    "bestValue": false
+   },
+   {
+    "metric": "complexity",
+    "value": "2"
+   },
+   {
+    "metric": "ncloc",
+    "value": "6"
+   }
+  ]
+ }
+]

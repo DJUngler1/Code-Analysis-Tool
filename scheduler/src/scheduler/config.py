@@ -10,6 +10,8 @@ from pathlib import Path
 DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434"
 # Network of the compose deployment; the tool containers join it.
 DEFAULT_TOOLS_NETWORK = "code-analysis-net"
+# SonarQube server of the compose deployment (service name in the network).
+DEFAULT_SONARQUBE_URL = "http://sonarqube:9000"
 # The repository's config/ folder, used when running from the source tree.
 REPOSITORY_CONFIG_DIR = Path(__file__).resolve().parents[3] / "config"
 
@@ -29,6 +31,16 @@ class Settings:
     # Tool configuration (opengrep.toml). docker-compose.yml mounts the
     # repository's config/ folder and sets CONFIG_DIR.
     config_dir: Path | None = None
+    # SonarQube (step 3): server URL for the scheduler and for the scanner
+    # containers (the same inside the compose network), and the password of
+    # the SonarQube user "admin" (docker/.env).
+    sonarqube_url: str = DEFAULT_SONARQUBE_URL
+    sonarqube_scanner_url: str | None = None
+    sonarqube_admin_password: str | None = None
+
+    @property
+    def scanner_url(self) -> str:
+        return self.sonarqube_scanner_url or self.sonarqube_url
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -39,6 +51,7 @@ class Settings:
         output_dir = env.get("OUTPUT_DIR", "").strip()
         tools_network = env.get("TOOLS_NETWORK", "").strip() or DEFAULT_TOOLS_NETWORK
         config_dir = env.get("CONFIG_DIR", "").strip()
+        sonarqube_url = env.get("SONARQUBE_URL", "").strip() or DEFAULT_SONARQUBE_URL
         return cls(
             projects_dir=Path(projects_dir).resolve() if projects_dir else None,
             host_home=Path(host_home) if host_home else None,
@@ -46,6 +59,9 @@ class Settings:
             output_dir=Path(output_dir).resolve() if output_dir else None,
             tools_network=tools_network,
             config_dir=Path(config_dir) if config_dir else _repository_config_dir(),
+            sonarqube_url=sonarqube_url.rstrip("/"),
+            sonarqube_scanner_url=(env.get("SONARQUBE_SCANNER_URL", "").strip().rstrip("/") or None),
+            sonarqube_admin_password=env.get("SONARQUBE_ADMIN_PASSWORD") or None,
         )
 
 

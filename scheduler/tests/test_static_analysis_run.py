@@ -69,10 +69,10 @@ def python_and_cpp_project(make_project) -> Path:
 
 
 def analyse(project: Path, tmp_path: Path, runner, config_dir: Path | None = None):
-    """Step 3 with opengrep-rules and 0xdea active, unless `config_dir` says otherwise."""
+    """OpenGrep only (SonarQube: test_sonarqube.py), with opengrep-rules and 0xdea active by default."""
     config_dir = config_dir or opengrep_config(tmp_path / "config")
     return run_static_analysis(run_acceptance(project), settings(tmp_path, config_dir), tmp_path / "run",
-                               runner=runner, now=lambda: NOW, out=lambda _: None)
+                               runner=runner, now=lambda: NOW, out=lambda _: None, tools=["OpenGrep"])
 
 
 @requires_git
@@ -189,10 +189,13 @@ def test_missing_report_fails(make_project, tmp_path):
 @requires_git
 def test_invalid_config_and_docker_errors(make_project, tmp_path):
     project = python_and_cpp_project(make_project)
+    # A configuration problem stops only OpenGrep, not the step (SonarQube still runs).
     result = analyse(project, tmp_path, FakeRunner(None), config_dir=tmp_path / "nothing")
-    assert "opengrep.toml is missing" in result.errors[0] and not result.complete
+    (run,) = result.tool_runs
+    assert run.status is Status.FAILED and "opengrep.toml is missing" in run.notes[0]
+    assert result.errors == [] and not result.complete
     summary = json.loads((tmp_path / "run" / "step3-static-analysis" / "summary.json").read_text())
-    assert summary["errors"] == result.errors and summary["tools"] == []
+    assert summary["tools"][0]["status"] == "failed"
 
     result = analyse(project, tmp_path, FakeRunner(None, unavailable="Docker is not reachable"))
     assert result.errors == ["Docker is not reachable"]

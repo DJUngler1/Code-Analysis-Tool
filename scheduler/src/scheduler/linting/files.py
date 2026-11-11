@@ -11,13 +11,14 @@ from scheduler.acceptance.filetree import is_skipped_dir
 GIT_TIMEOUT_SECONDS = 120
 
 
-def source_files(project: Path, suffixes: Iterable[str]) -> list[Path]:
-    """Project files with one of the suffixes, relative to the project.
+def source_files(project: Path, suffixes: Iterable[str] | None, *, skip_folders: bool = True) -> list[Path]:
+    """Project files with one of the suffixes (None: all files), relative to the project.
 
-    Only files git knows (tracked or untracked but not ignored), and none in
-    the folders step 1 skips (vendor/, third_party/, build/, hidden folders, ...).
+    Only files git knows (tracked or untracked but not ignored). With
+    `skip_folders`, none in the folders step 1 skips (vendor/, third_party/,
+    build/, hidden folders, ...).
     """
-    wanted = {suffix.lower() for suffix in suffixes}
+    wanted = None if suffixes is None else {suffix.lower() for suffix in suffixes}
     result = subprocess.run(
         ["git", "-c", "safe.directory=*", "-C", str(project),
          "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."],
@@ -31,9 +32,9 @@ def source_files(project: Path, suffixes: Iterable[str]) -> list[Path]:
         if not raw:
             continue
         path = Path(raw.decode("utf-8", errors="surrogateescape"))
-        if path.suffix.lower() not in wanted:
+        if wanted is not None and path.suffix.lower() not in wanted:
             continue
-        if any(is_skipped_dir(part) for part in path.parts[:-1]):
+        if skip_folders and any(is_skipped_dir(part) for part in path.parts[:-1]):
             continue
         if (project / path).is_file():
             files.append(path)

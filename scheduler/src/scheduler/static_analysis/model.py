@@ -47,6 +47,10 @@ class AnalysisRun:
     rulesets: list[dict] = field(default_factory=list)
     rules_run: int | None = None  # rules that applied to the scanned files
     files_scanned: int | None = None
+    # SonarQube: project metrics (lines of code, complexity, duplication, ...).
+    measures: dict[str, str] = field(default_factory=dict)
+    # Tool-specific facts for the report, e.g. server and plugin versions.
+    details: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass

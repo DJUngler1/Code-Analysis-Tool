@@ -76,7 +76,7 @@ def _run(path_arg: str | None, settings: Settings, *, check_only: bool = False) 
         return EXIT_LINTING_INCOMPLETE
 
     # Runs even if a linter failed: the analysis does not depend on step 2.
-    print("\nStep 3 – static code analysis (OpenGrep) ...\n")
+    print("\nStep 3 – static code analysis (OpenGrep and SonarQube, in parallel) ...\n")
     analysis = run_static_analysis(result, settings, linting.run_dir)
     print(format_analysis(analysis))
     if not linting.complete:
@@ -186,11 +186,11 @@ def format_analysis(result: AnalysisResult) -> str:
         by_severity = Counter(finding.severity for finding in findings)
         detail = ", ".join(f"{count} {severity}" for severity, count in by_severity.most_common())
         lines.append(f"\n{len(findings)} findings" + (f" ({detail})." if detail else "."))
-        rulesets = {
-            entry["name"]: entry["commit"][:7] for run in result.tool_runs for entry in run.rulesets
-        }
-        if rulesets:
-            lines.append("Rule sets: " + ", ".join(f"{name} ({commit})" for name, commit in rulesets.items()))
+        for run in result.tool_runs:
+            if run.rulesets:
+                lines.append(f"Rule sets of {run.tool}: " + ", ".join(_ruleset_label(entry) for entry in run.rulesets))
+            if web := run.details.get("web_interface"):
+                lines.append(f"SonarQube web interface: {web}")
         failed = [run.tool for run in result.tool_runs if run.status is Status.FAILED]
         if failed:
             lines.append(f"Failed: {', '.join(failed)} (see the notes above and summary.json).")
@@ -199,3 +199,9 @@ def format_analysis(result: AnalysisResult) -> str:
         lines.append(f"Results: {result.run_dir / ANALYSIS_STEP_DIR}")
     lines.append("Step 3 complete." if result.complete else "Step 3 incomplete.")
     return "\n".join(lines)
+
+
+def _ruleset_label(entry: dict) -> str:
+    """"opengrep-rules (f1d2b56)" for OpenGrep, "Sonar way (py)" for SonarQube's quality profiles."""
+    detail = str(entry["commit"])[:7] if entry.get("commit") else entry.get("language", "")
+    return f"{entry['name']} ({detail})" if detail else str(entry["name"])

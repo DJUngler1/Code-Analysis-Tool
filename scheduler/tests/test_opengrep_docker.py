@@ -82,7 +82,8 @@ def analyse(root: Path, workspace: Path, runner, rulesets: tuple[str, ...]):
                         output_dir=workspace / "results", config_dir=config_dir)
     acceptance = run_acceptance(root)
     assert acceptance.accepted, acceptance.message
-    return run_static_analysis(acceptance, settings, workspace / "results" / "run", runner=runner, out=lambda _: None)
+    return run_static_analysis(acceptance, settings, workspace / "results" / "run", runner=runner,
+                               out=lambda _: None, tools=["OpenGrep"])
 
 
 def found(result) -> set[tuple[str | None, str, str | None]]:

@@ -1,0 +1,225 @@
+[
+ {
+  "key": "5f8f7589-c720-4d54-b81b-9be5387b1f1e",
+  "rule": "python:S1172",
+  "severity": "MAJOR",
+  "component": "code-analysis_sq-multi:src/app.py",
+  "project": "code-analysis_sq-multi",
+  "line": 4,
+  "hash": "7c57ae994155f7103dd47547b993b153",
+  "textRange": {
+   "startLine": 4,
+   "endLine": 4,
+   "startOffset": 13,
+   "endOffset": 23
+  },
+  "flows": [],
+  "status": "OPEN",
+  "message": "Remove the unused function parameter \"unused_arg\".",
+  "effort": "5min",
+  "debt": "5min",
+  "author": "",
+  "tags": [
+   "unused"
+  ],
+  "creationDate": "2026-11-11T17:00:42+0000",
+  "updateDate": "2026-11-11T17:00:42+0000",
+  "type": "CODE_SMELL",
+  "scope": "MAIN",
+  "quickFixAvailable": false,
+  "messageFormattings": [],
+  "codeVariants": [],
+  "cleanCodeAttribute": "CLEAR",
+  "cleanCodeAttributeCategory": "INTENTIONAL",
+  "impacts": [
+   {
+    "softwareQuality": "MAINTAINABILITY",
+    "severity": "MEDIUM"
+   }
+  ],
+  "issueStatus": "OPEN",
+  "prioritizedRule": false,
+  "fromSonarQubeUpdate": false,
+  "internalTags": [],
+  "linkedTicketStatus": "NOT_LINKED"
+ },
+ {
+  "key": "ad25861e-4520-476e-b94a-11933058f4bf",
+  "rule": "python:S1481",
+  "severity": "MINOR",
+  "component": "code-analysis_sq-multi:src/app.py",
+  "project": "code-analysis_sq-multi",
+  "line": 5,
+  "hash": "b4cc0d7585f45a0eacbdada1c747aca1",
+  "textRange": {
+   "startLine": 5,
+   "endLine": 5,
+   "startOffset": 4,
+   "endOffset": 12
+  },
+  "flows": [],
+  "status": "OPEN",
+  "message": "Remove the unused local variable \"password\".",
+  "effort": "5min",
+  "debt": "5min",
+  "author": "",
+  "tags": [
+   "unused"
+  ],
+  "creationDate": "2026-11-11T17:00:42+0000",
+  "updateDate": "2026-11-11T17:00:42+0000",
+  "type": "CODE_SMELL",
+  "scope": "MAIN",
+  "quickFixAvailable": false,
+  "messageFormattings": [],
+  "codeVariants": [],
+  "cleanCodeAttribute": "CLEAR",
+  "cleanCodeAttributeCategory": "INTENTIONAL",
+  "impacts": [
+   {
+    "softwareQuality": "MAINTAINABILITY",
+    "severity": "LOW"
+   }
+  ],
+  "issueStatus": "OPEN",
+  "prioritizedRule": false,
+  "fromSonarQubeUpdate": false,
+  "internalTags": [],
+  "linkedTicketStatus": "NOT_LINKED"
+ },
+ {
+  "key": "9d5740e1-25b2-439d-b244-a634edfdcb80",
+  "rule": "python:S1481",
+  "severity": "MINOR",
+  "component": "code-analysis_sq-multi:src/app.py",
+  "project": "code-analysis_sq-multi",
+  "line": 6,
+  "hash": "a255512f9d61a6777bd5a304235bd26d",
+  "textRange": {
+   "startLine": 6,
+   "endLine": 6,
+   "startOffset": 4,
+   "endOffset": 5
+  },
+  "flows": [],
+  "status": "OPEN",
+  "message": "Remove the unused local variable \"x\".",
+  "effort": "5min",
+  "debt": "5min",
+  "author": "",
+  "tags": [
+   "unused"
+  ],
+  "creationDate": "2026-11-11T17:00:42+0000",
+  "updateDate": "2026-11-11T17:00:42+0000",
+  "type": "CODE_SMELL",
+  "scope": "MAIN",
+  "quickFixAvailable": false,
+  "messageFormattings": [],
+  "codeVariants": [],
+  "cleanCodeAttribute": "CLEAR",
+  "cleanCodeAttributeCategory": "INTENTIONAL",
+  "impacts": [
+   {
+    "softwareQuality": "MAINTAINABILITY",
+    "severity": "LOW"
+   }
+  ],
+  "issueStatus": "OPEN",
+  "prioritizedRule": false,
+  "fromSonarQubeUpdate": false,
+  "internalTags": [],
+  "linkedTicketStatus": "NOT_LINKED"
+ },
+ {
+  "key": "f8bbca28-8a23-42b5-ab52-026ed54f55db",
+  "rule": "python:S4790",
+  "severity": "CRITICAL",
+  "component": "code-analysis_sq-multi:src/crypto.py",
+  "project": "code-analysis_sq-multi",
+  "line": 6,
+  "hash": "596023774e2ed54f46bf29db704d026d",
+  "textRange": {
+   "startLine": 6,
+   "endLine": 6,
+   "startOffset": 19,
+   "endOffset": 22
+  },
+  "flows": [],
+  "status": "OPEN",
+  "message": "Make sure that hashing data is safe here.",
+  "effort": "30min",
+  "debt": "30min",
+  "author": "",
+  "tags": [
+   "cwe",
+   "former-hotspot"
+  ],
+  "creationDate": "2026-11-11T17:00:42+0000",
+  "updateDate": "2026-11-11T17:00:42+0000",
+  "type": "VULNERABILITY",
+  "scope": "MAIN",
+  "quickFixAvailable": false,
+  "messageFormattings": [],
+  "codeVariants": [],
+  "cleanCodeAttribute": "TRUSTWORTHY",
+  "cleanCodeAttributeCategory": "RESPONSIBLE",
+  "impacts": [
+   {
+    "softwareQuality": "SECURITY",
+    "severity": "HIGH"
+   }
+  ],
+  "issueStatus": "OPEN",
+  "prioritizedRule": false,
+  "fromSonarQubeUpdate": false,
+  "internalTags": [],
+  "linkedTicketStatus": "NOT_LINKED"
+ },
+ {
+  "key": "01f42bec-7d5f-4aff-9178-eede7cb3abaf",
+  "rule": "python:S4830",
+  "severity": "CRITICAL",
+  "component": "code-analysis_sq-multi:src/crypto.py",
+  "project": "code-analysis_sq-multi",
+  "line": 10,
+  "hash": "3562cec992fab5ad684b262d0f93821e",
+  "textRange": {
+   "startLine": 10,
+   "endLine": 10,
+   "startOffset": 36,
+   "endOffset": 41
+  },
+  "flows": [],
+  "status": "OPEN",
+  "message": "Enable server certificate validation on this SSL/TLS connection.",
+  "effort": "5min",
+  "debt": "5min",
+  "author": "",
+  "tags": [
+   "cwe",
+   "privacy",
+   "ssl"
+  ],
+  "creationDate": "2026-11-11T17:00:42+0000",
+  "updateDate": "2026-11-11T17:00:42+0000",
+  "type": "VULNERABILITY",
+  "scope": "MAIN",
+  "quickFixAvailable": false,
+  "messageFormattings": [],
+  "codeVariants": [],
+  "cleanCodeAttribute": "TRUSTWORTHY",
+  "cleanCodeAttributeCategory": "RESPONSIBLE",
+  "impacts": [
+   {
+    "softwareQuality": "SECURITY",
+    "severity": "HIGH"
+   }
+  ],
+  "issueStatus": "OPEN",
+  "prioritizedRule": false,
+  "fromSonarQubeUpdate": false,
+  "internalTags": [],
+  "linkedTicketStatus": "NOT_LINKED"
+ }
+]

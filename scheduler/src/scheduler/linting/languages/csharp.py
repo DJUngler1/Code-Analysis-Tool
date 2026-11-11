@@ -25,7 +25,7 @@ _ANALYZER_PACKAGES = re.compile(
 
 
 def run(ctx: LintContext) -> list[ToolRun]:
-    targets = _targets(ctx.manifests(LANGUAGE))
+    targets = build_targets(ctx.manifests(LANGUAGE))
     if not targets:
         return [skipped(LANGUAGE, "dotnet format", "no solution or project file (.sln, .slnx, .csproj)")]
     # dotnet format also reads .editorconfig files above the project folder.
@@ -34,7 +34,7 @@ def run(ctx: LintContext) -> list[ToolRun]:
         return [run_tool(ctx, LANGUAGE, "dotnet format", IMAGE, lambda session: _format(session, targets, configs))]
 
 
-def _targets(manifests: list[Path]) -> list[Path]:
+def build_targets(manifests: list[Path]) -> list[Path]:
     """Each solution file; without solutions, each project file."""
     solutions = [path for path in manifests if path.suffix in SOLUTION_SUFFIXES]
     return solutions or [path for path in manifests if path.suffix == ".csproj"]

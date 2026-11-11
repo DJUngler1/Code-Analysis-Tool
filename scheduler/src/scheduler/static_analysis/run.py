@@ -9,16 +9,19 @@ folder of step 2:
     summary.json      one entry per tool: version, command, status, rule sets, ...
     findings.json     normalized findings of all tools
     opengrep/         OpenGrep's JSON and SARIF reports, stdout/stderr
+    sonarqube/        SonarQube: scanner parameters and logs, Web API answers (api/)
 
-SonarQube follows as a second tool; both will then run in parallel.
+OpenGrep and SonarQube run in parallel; a tool that fails doesn't stop the other.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import time
 import traceback
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,11 +31,16 @@ from scheduler.config import Settings
 from scheduler.linting.docker import DockerError, DockerRunner, ToolRunner
 from scheduler.linting.model import Status
 from scheduler.linting.run import mount_root
-from scheduler.static_analysis import opengrep
+from scheduler.static_analysis import opengrep, sonarqube
+from scheduler.static_analysis.context import AnalysisContext
 from scheduler.static_analysis.model import AnalysisResult, AnalysisRun
-from scheduler.static_analysis.rulesets import RulesetError, load_config
 
 STEP_DIR = "step3-static-analysis"
+# Label, tool name (summary.json) and implementation; they run in parallel.
+TOOLS: tuple[tuple[str, Callable[[AnalysisContext], AnalysisRun]], ...] = (
+    ("OpenGrep", opengrep.run_opengrep),
+    ("SonarQube", sonarqube.run_sonarqube),
+)
 
 
 def run_static_analysis(
@@ -43,38 +51,49 @@ def run_static_analysis(
     runner: ToolRunner | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     out: Callable[[str], None] = print,
+    tools: Sequence[str] | None = None,
+    sonar_api: Callable | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> AnalysisResult:
+    """Run the tools of step 3 in parallel; `tools` selects some by label (tests)."""
     started = now()
     step_dir = run_dir / STEP_DIR
     step_dir.mkdir(parents=True, exist_ok=True)
     result = AnalysisResult(run_dir)
     try:
-        config = load_config(settings.config_dir)
         runner = runner or DockerRunner(settings.tools_network)
         runner.check_available()
-        runner.ensure_image(opengrep.IMAGE)
-    except (RulesetError, DockerError) as exc:
+    except DockerError as exc:
         result.errors.append(str(exc))
         _write_results(result, acceptance, started, now())
         return result
 
-    ctx = opengrep.ScanContext(
+    lock = threading.Lock()
+
+    def locked_out(line: str) -> None:
+        with lock:
+            out(line)
+
+    ctx = AnalysisContext(
         project=acceptance.project,
         mount_root=mount_root(acceptance.project, settings.projects_dir),
         step_dir=step_dir,
         acceptance=acceptance,
         runner=runner,
-        config=config,
-        out=out,
+        settings=settings,
+        out=locked_out,
+        sonar_api=sonar_api,
+        sleep=sleep,
     )
-    result.tool_runs.append(_run_tool(ctx, "OpenGrep", opengrep.run_opengrep))
+    selected = [(label, body) for label, body in TOOLS if tools is None or label in tools]
+    with ThreadPoolExecutor(max_workers=len(selected) or 1) as pool:
+        futures = [pool.submit(_run_tool, ctx, label, body) for label, body in selected]
+        result.tool_runs = [future.result() for future in futures]
     _write_results(result, acceptance, started, now())
     return result
 
 
-def _run_tool(
-    ctx: opengrep.ScanContext, label: str, body: Callable[[opengrep.ScanContext], AnalysisRun]
-) -> AnalysisRun:
+def _run_tool(ctx: AnalysisContext, label: str, body: Callable[[AnalysisContext], AnalysisRun]) -> AnalysisRun:
     ctx.out(f"  {label:<22} running ...")
     started = time.monotonic()
     try:
@@ -140,6 +159,8 @@ def _tool_summary(run: AnalysisRun) -> dict:
         "findings": len(run.findings),
         "findings_by_severity": _count(finding.severity for finding in run.findings),
         "findings_by_category": _count(finding.category or "none" for finding in run.findings),
+        "measures": run.measures,
+        "details": run.details,
         "notes": run.notes,
         "output_dir": run.output_dir,
     }
