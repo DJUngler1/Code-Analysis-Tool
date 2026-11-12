@@ -17,6 +17,7 @@ from scheduler.linting.model import CommandResult, Status
 from scheduler.static_analysis import run_static_analysis, sonarqube
 from scheduler.static_analysis.model import AnalysisRun
 from scheduler.static_analysis.sonar_api import SonarError
+from scheduler.workspace import prepare_workspace
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sonarqube"
 NOW = datetime(2026, 11, 11, 12, 0, 0)
@@ -230,7 +231,7 @@ def test_workspace_copy(make_project, tmp_path):
     commit_all(project)
     (project / "untracked.py").write_text("z = 3\n")
     workspace = tmp_path / "workspace"
-    assert sonarqube.prepare_workspace(project, workspace) == 5
+    assert prepare_workspace(project, workspace) == 5
     assert (workspace / "vendor/lib.py").is_file() and (workspace / ".mvn/wrapper/x.properties").is_file()
     assert (workspace / "untracked.py").is_file() and not (workspace / "ignored.txt").exists()
     assert (workspace / ".git").is_dir()

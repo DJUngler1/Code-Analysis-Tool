@@ -37,6 +37,8 @@ class Settings:
     sonarqube_url: str = DEFAULT_SONARQUBE_URL
     sonarqube_scanner_url: str | None = None
     sonarqube_admin_password: str | None = None
+    # Step 4: token of the free ConanCenter audit service (conan audit); optional.
+    conan_audit_token: str | None = None
 
     @property
     def scanner_url(self) -> str:
@@ -62,6 +64,7 @@ class Settings:
             sonarqube_url=sonarqube_url.rstrip("/"),
             sonarqube_scanner_url=(env.get("SONARQUBE_SCANNER_URL", "").strip().rstrip("/") or None),
             sonarqube_admin_password=env.get("SONARQUBE_ADMIN_PASSWORD") or None,
+            conan_audit_token=env.get("CONAN_AUDIT_TOKEN", "").strip() or None,
         )
 
 

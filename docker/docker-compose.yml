@@ -44,6 +44,8 @@ services:
       SONARQUBE_URL: http://sonarqube:9000
       # Without it, step 3 reports SonarQube as failed (see docker/.env.example).
       SONARQUBE_ADMIN_PASSWORD: ${SONARQUBE_ADMIN_PASSWORD:-}
+      # Optional (step 4): token for `conan audit` (free registration at audit.conan.io).
+      CONAN_AUDIT_TOKEN: ${CONAN_AUDIT_TOKEN:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
       # Mounted read-write at the same absolute path as on the host, so host
@@ -172,6 +174,19 @@ services:
     profiles: ["tools"]
     build: static-analysis/sonar-dotnet
     image: code-analysis/sonar-dotnet:latest
+
+  # Dependency checks (step 4). OSV-Scanner (official image, pinned) and the
+  # Python package manager tools; the other ecosystems use the images of
+  # step 2 (npm/Yarn/pnpm/Bun, cargo-audit, dotnet, Conan) and sonar-scanner
+  # (Gradle). Definition: docs/dependencyAudit/README.md
+  osv-scanner:
+    profiles: ["tools"]
+    build: dependencies/osv-scanner
+    image: code-analysis/osv-scanner:latest
+  audit-python:
+    profiles: ["tools"]
+    build: dependencies/python
+    image: code-analysis/audit-python:latest
 
 volumes:
   sonarqube-data:

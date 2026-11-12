@@ -4,6 +4,7 @@ from test_ollama import unused_port
 
 from scheduler.cli import main
 from scheduler.linting import LintingResult, Status, ToolRun
+from scheduler.dependencies import Coverage, DependencyFinding, DependencyResult, DependencyRun
 from scheduler.static_analysis import AnalysisResult, AnalysisRun
 
 
@@ -35,6 +36,25 @@ def analysis_calls(monkeypatch) -> FakeAnalysis:
 
 def fake_analysis(calls: FakeAnalysis, result: AnalysisResult) -> None:
     calls.result = result
+
+
+class FakeDependencies(list):
+    """Stands in for step 4 (Docker, network): records the run folders, returns `result`."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.result = DependencyResult(None, [DependencyRun("osv-scanner", Status.OK)])
+
+    def __call__(self, acceptance, settings, run_dir):
+        self.append(run_dir)
+        return self.result
+
+
+@pytest.fixture(autouse=True)
+def dependency_calls(monkeypatch) -> FakeDependencies:
+    fake = FakeDependencies()
+    monkeypatch.setattr("scheduler.cli.run_dependencies", fake)
+    return fake
 
 
 def fake_linting(monkeypatch, result: LintingResult) -> list:
@@ -187,3 +207,37 @@ def test_format_analysis_names_rule_sets_and_the_web_interface(tmp_path):
     assert "Rule sets of sonarqube: Sonar way (py), Sonar way (java)" in text
     assert "SonarQube web interface: http://localhost:9000/dashboard?id=code-analysis_x" in text
     assert "Step 3 complete." in text  # partial is not failed
+
+
+@requires_git
+def test_incomplete_step_4_exits_with_7(monkeypatch, make_project, capsys, tmp_path, dependency_calls):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    fake_linting(monkeypatch, LintingResult(tmp_path / "run", [ToolRun("Python", "ruff check", Status.OK)]))
+    finding = DependencyFinding("osv-scanner", "PyPI", "django", "2.0", "PYSEC-2018-2", severity="medium")
+    dependency_calls.result = DependencyResult(
+        tmp_path / "run",
+        [DependencyRun("osv-scanner", Status.OK, findings=[finding]),
+         DependencyRun("pip-audit", Status.FAILED, manifest="requirements.txt")],
+        coverage=[Coverage("Cargo", "Cargo.toml", "Cargo.lock", "generated", True, "cargo audit"),
+                  Coverage("vcpkg", "vcpkg.json", None, "not supported", False, None)],
+    )
+    assert main(["--path", str(root)]) == 7
+    out = capsys.readouterr().out
+    assert dependency_calls == [tmp_path / "run"]
+    assert "Lock files generated for: Cargo.toml" in out
+    assert "Not checked by any tool: vcpkg (vcpkg.json)" in out
+    assert "1 findings (1 medium), 1 distinct package/advisory pairs." in out
+    assert "Failed: pip-audit (requirements.txt)" in out
+    assert "Step 4 incomplete." in out
+
+
+@requires_git
+def test_step_3_failure_takes_precedence_over_step_4(monkeypatch, make_project, tmp_path, analysis_calls,
+                                                    dependency_calls):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    fake_linting(monkeypatch, LintingResult(tmp_path / "run", [ToolRun("Python", "ruff check", Status.OK)]))
+    analysis_calls.result = AnalysisResult(tmp_path / "run", errors=["image missing"])
+    dependency_calls.result = DependencyResult(tmp_path / "run", errors=["Docker is not reachable"])
+    assert main(["--path", str(root)]) == 6

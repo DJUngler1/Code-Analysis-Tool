@@ -17,7 +17,8 @@ Requirements: Docker (Docker Desktop on macOS/Windows) and, for the LLM evaluati
    - `PROJECTS_DIR` to the folder that contains your projects. It is mounted **read-write** at the same path inside the container, so you can paste host paths unchanged. Only projects below this folder can be analyzed.
    - `OUTPUT_DIR` to the folder for the results, outside your projects. It is created if missing.
    - `SONARQUBE_ADMIN_PASSWORD` and `SONARQUBE_DB_PASSWORD` for SonarQube (step 3). The admin password needs at least 12 characters with an uppercase and a lowercase letter, a digit and a special character. The tool sets it on SonarQube's first start; you log in with it at http://localhost:9000.
-2. Build the tool images: linters/formatters, OpenGrep and the SonarQube scanners. Do this once, and again after changes in `docker/linters/`, `docker/static-analysis/` or the rule sets in `config/opengrep.toml`. It downloads the toolchains (about 5 GB):
+   - Optional: `CONAN_AUDIT_TOKEN` for `conan audit` in step 4 (free registration at https://audit.conan.io/register).
+2. Build the tool images: linters/formatters, OpenGrep, the SonarQube scanners and the dependency checks. Do this once, and again after changes in `docker/linters/`, `docker/static-analysis/`, `docker/dependencies/` or the rule sets in `config/opengrep.toml`. It downloads the toolchains (about 5 GB):
    ```sh
    docker compose -f docker/docker-compose.yml --profile tools build
    ```
@@ -51,13 +52,14 @@ Language shares are bytes of source code per language, as on GitHub. A `.h` file
 
 | Exit code | Meaning |
 |---|---|
-| 0 | Project accepted (and, without `--check-only`, steps 2 and 3 completed) |
+| 0 | Project accepted (and, without `--check-only`, steps 2 to 4 completed) |
 | 1 | Invalid input or no project selected |
 | 2 | Language not supported, or no source code found |
 | 3 | No package manager found for the primary language |
 | 4 | Not a git repository, or uncommitted changes |
 | 5 | Step 2 incomplete: `OUTPUT_DIR`, Docker or a tool image missing, a tool failed, or a project file could not be moved back |
 | 6 | Step 3 incomplete: OpenGrep or SonarQube failed, e.g. `config/opengrep.toml` invalid, a tool image missing or outdated, the SonarQube server not running or `SONARQUBE_ADMIN_PASSWORD` missing |
+| 7 | Step 4 incomplete: Docker or a tool image missing, a dependency check failed, or a lock file could not be generated (completely) |
 | 125 | (`bin/code-analysis` only) Docker or the container is not running |
 
 ### Linters and formatters (step 2)
@@ -112,13 +114,39 @@ After step 2, OpenGrep and SonarQube Community Build analyse the project in para
 
 **Docker socket on Linux:** the scheduler needs the group of `/var/run/docker.sock` to start containers. The default (991) fits Docker Desktop. On Linux, set `DOCKER_SOCKET_GID` in `docker/.env` to the output of `stat -c %g /var/run/docker.sock`; the tool prints the right value if it is wrong.
 
+### Dependencies (step 4)
+
+After step 3, the project's dependencies are checked for known vulnerabilities, as defined in [docs/dependencyAudit/README.md](docs/dependencyAudit/README.md).
+- **Stage 1:** OSV-Scanner checks the lock files of all ecosystems.
+- **Stage 2:** the audit of each package manager step 1 found: npm, Yarn, pnpm, Bun, `cargo audit`, `dotnet package list --vulnerable` and `pip-audit`. `conan audit` runs only with a token.
+- **Parallel:** all checks run at the same time.
+
+**How it runs:**
+- All checks work on a copy of the project in the run folder.
+- Missing lock files (e.g. `Cargo.lock`, `package-lock.json`, `packages.lock.json`, `gradle.lockfile`) are generated there with the package manager's own command; the project is not changed.
+- Gradle: every configuration of every module is locked, also build tooling (e.g. plugin configurations). Each Gradle finding is tagged with its configurations and a scope (`runtime`, `compile`, `test`, `tooling`).
+
+**Network:** the checks query OSV.dev, deps.dev and the package registries. Package names and versions of the project leave the machine.
+
+**Gaps:**
+- Maven and Gradle have no audit of their own, but OSV-Scanner covers them.
+- The OSV database has no data for Conan packages; only `conan audit` with a token covers them.
+- vcpkg and Conda are not checked at all.
+
+| Path | Content |
+|---|---|
+| `step4-dependencies/summary.json` | Coverage per manifest (lock file committed, generated, partial, failed or not supported; tools), per check: version, commands, status, findings per severity, notes; Gradle findings per scope |
+| `step4-dependencies/findings.json` | Findings in one format: tool, package manager, manifest, package, version, advisory id and aliases (CVE, GHSA, …), severity, CVSS, summary, fixed versions, URL; for Gradle the configurations and the scope |
+| `step4-dependencies/osv-scanner/`, `audits/` | Raw reports of OSV-Scanner and of each audit |
+| `step4-dependencies/lockfiles/` | The lock files generated for the checks |
+
 ### Ollama
 
 The container reaches Ollama at `http://host.docker.internal:11434` (change it with `OLLAMA_BASE_URL` in `docker/.env`). With Docker Desktop the default Ollama setup works. On Linux, Ollama must listen on all interfaces (`OLLAMA_HOST=0.0.0.0 ollama serve`), and `HOST_UID` / `HOST_GID` should be set in `docker/.env` so files written by the tool keep your ownership.
 
 ### Network
 
-All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The OpenGrep container of step 3 has no network: its rules are part of the image. The SonarQube scanners use the network to reach the server (`http://sonarqube:9000`) and, for builds, the dependencies. The SonarQube server is published only on `127.0.0.1:9000`.
+All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The OpenGrep container of step 3 has no network: its rules are part of the image. The SonarQube scanners use the network to reach the server (`http://sonarqube:9000`) and, for builds, the dependencies. The SonarQube server is published only on `127.0.0.1:9000`. The containers of step 4 use the network to resolve dependencies and to query OSV.dev, deps.dev and the registries.
 
 ### Development
 
@@ -129,7 +157,7 @@ python3 -m venv .venv
 .venv/bin/pytest
 ```
 
-The integration tests of steps 2 and 3 run the real tool images and are skipped by default. The SonarQube tests also need the running server (`up -d`) and `SONARQUBE_ADMIN_PASSWORD` (environment or `docker/.env`). They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
+The integration tests of steps 2 to 4 run the real tool images and are skipped by default; those of step 4 need internet access. The SonarQube tests also need the running server (`up -d`) and `SONARQUBE_ADMIN_PASSWORD` (environment or `docker/.env`). They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
 
 ```sh
 CODE_ANALYSIS_DOCKER_TEST_DIR=~/code-analysis-results/_itest .venv/bin/pytest -m docker

@@ -10,6 +10,9 @@ from pathlib import Path
 
 from scheduler.acceptance import AcceptanceResult, run_acceptance
 from scheduler.config import Settings
+from scheduler.dependencies import DependencyResult, run_dependencies
+from scheduler.dependencies.run import STEP_DIR as DEPENDENCIES_STEP_DIR
+from scheduler.dependencies.run import scope_counts
 from scheduler.linting import LintingResult, Status, run_linting
 from scheduler.ollama import OllamaStatus, check_ollama
 from scheduler.paths import PathError, resolve_project_path
@@ -23,6 +26,9 @@ EXIT_LINTING_INCOMPLETE = 5
 # Step 3 could not run completely: rule set configuration invalid, Docker or
 # the OpenGrep image missing or outdated, or OpenGrep failed.
 EXIT_ANALYSIS_INCOMPLETE = 6
+# Step 4 could not run completely: Docker or a tool image missing, a lock file
+# command or a dependency check failed.
+EXIT_DEPENDENCIES_INCOMPLETE = 7
 MAX_LISTED_MANIFESTS = 5
 MAX_LISTED_MODELS = 5
 
@@ -79,9 +85,16 @@ def _run(path_arg: str | None, settings: Settings, *, check_only: bool = False) 
     print("\nStep 3 – static code analysis (OpenGrep and SonarQube, in parallel) ...\n")
     analysis = run_static_analysis(result, settings, linting.run_dir)
     print(format_analysis(analysis))
+
+    print("\nStep 4 – dependencies (OSV-Scanner and the package manager audits; "
+          "package names and versions are sent to OSV.dev and the registries) ...\n")
+    dependencies = run_dependencies(result, settings, linting.run_dir)
+    print(format_dependencies(dependencies))
     if not linting.complete:
         return EXIT_LINTING_INCOMPLETE
-    return int(result.outcome) if analysis.complete else EXIT_ANALYSIS_INCOMPLETE
+    if not analysis.complete:
+        return EXIT_ANALYSIS_INCOMPLETE
+    return int(result.outcome) if dependencies.complete else EXIT_DEPENDENCIES_INCOMPLETE
 
 
 def prompt_for_project(settings: Settings) -> Path | None:
@@ -205,3 +218,38 @@ def _ruleset_label(entry: dict) -> str:
     """"opengrep-rules (f1d2b56)" for OpenGrep, "Sonar way (py)" for SonarQube's quality profiles."""
     detail = str(entry["commit"])[:7] if entry.get("commit") else entry.get("language", "")
     return f"{entry['name']} ({detail})" if detail else str(entry["name"])
+
+
+def format_dependencies(result: DependencyResult) -> str:
+    lines: list[str] = []
+    if result.coverage:
+        generated = [entry.manifest for entry in result.coverage if entry.lockfile_state == "generated"]
+        uncovered = [f"{entry.manager} ({entry.manifest})" for entry in result.coverage
+                     if not entry.osv and entry.audit is None]
+        if generated:
+            lines.append(f"\nLock files generated for: {', '.join(generated)}")
+        if uncovered:
+            lines.append(f"Not checked by any tool: {', '.join(uncovered)}")
+        for entry in result.incomplete_lockfiles:
+            state = "failed" if entry.lockfile_state == "failed" else "incomplete"
+            lines.append(f"Lock file {state}: {entry.manager} ({entry.manifest}): {entry.notes[-1]}")
+    if result.tool_runs:
+        counts = Counter(finding.severity for finding in result.findings)
+        order = ("critical", "high", "medium", "low", "unknown")
+        detail = ", ".join(f"{counts[severity]} {severity}" for severity in order if counts[severity])
+        advisories = {(finding.package, finding.id) for finding in result.findings}
+        lines.append(f"\n{len(result.findings)} findings" + (f" ({detail})" if detail else "")
+                     + f", {len(advisories)} distinct package/advisory pairs.")
+        scopes = scope_counts(result.findings)
+        if scopes:
+            detail = ", ".join(f"{count} {scope}" for scope, count in scopes.items())
+            lines.append(f"Gradle findings by scope: {detail}")
+        failed = [f"{run.tool} ({run.manifest})" if run.manifest else run.tool
+                  for run in result.tool_runs if run.status is Status.FAILED]
+        if failed:
+            lines.append(f"Failed: {', '.join(failed)} (see the notes above and summary.json).")
+    lines += [f"Error: {error}" for error in result.errors]
+    if result.run_dir is not None:
+        lines.append(f"Results: {result.run_dir / DEPENDENCIES_STEP_DIR}")
+    lines.append("Step 4 complete." if result.complete else "Step 4 incomplete.")
+    return "\n".join(lines)

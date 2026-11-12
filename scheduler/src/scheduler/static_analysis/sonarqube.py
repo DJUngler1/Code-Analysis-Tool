@@ -20,7 +20,6 @@ import json
 import re
 import shlex
 import shutil
-import subprocess
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
@@ -28,7 +27,6 @@ from pathlib import Path, PurePosixPath
 from scheduler.acceptance.filetree import SKIP_DIRS
 from scheduler.config import Settings
 from scheduler.linting.docker import DockerError
-from scheduler.linting.files import source_files
 from scheduler.linting.languages.csharp import build_targets
 from scheduler.linting.model import CommandResult, Status
 from scheduler.linting.session import last_lines
@@ -37,6 +35,7 @@ from scheduler.linting.versions import java_version, python_version
 from scheduler.static_analysis.context import AnalysisContext, language_of
 from scheduler.static_analysis.model import AnalysisFinding, AnalysisRun
 from scheduler.static_analysis.sonar_api import HttpSonarApi, SonarApi, SonarError
+from scheduler.workspace import prepare_workspace
 
 TOOL = "sonarqube"
 SCANNER_IMAGE = "code-analysis/sonar-scanner:latest"
@@ -257,31 +256,6 @@ def use_cxx_profile(api: SonarApi, key: str) -> dict:
 def project_key(project: Path) -> str:
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", project.name).strip("_") or "project"
     return f"code-analysis_{name}"
-
-
-def prepare_workspace(project: Path, workspace: Path) -> int:
-    """Copy the files git knows (tracked, or untracked and not ignored) into the workspace.
-
-    All of them, also vendored and generated ones: the build may need them.
-    The analysis leaves them out with sonar.exclusions. The copy becomes a git
-    repository of its own (nothing committed), so that SonarQube's text and
-    secrets sensor sees all files, not only those of known languages.
-    """
-    shutil.rmtree(workspace, ignore_errors=True)
-    workspace.mkdir(parents=True)
-    copied = 0
-    for relative in source_files(project, None, skip_folders=False):
-        source = project / relative
-        if source.is_symlink() or not source.is_file():
-            continue
-        target = workspace / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-        copied += 1
-    for args in (["init", "--quiet"], ["add", "--all"]):
-        subprocess.run(["git", "-c", "safe.directory=*", "-C", str(workspace), *args],
-                       capture_output=True, check=False, timeout=600)
-    return copied
 
 
 def exclusions(excluded_files: Iterable[str]) -> list[str]:
