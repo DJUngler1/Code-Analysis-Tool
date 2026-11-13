@@ -106,6 +106,99 @@ class HeadComparison:
                 or self.counts_after_step_2 != self.counts_head)
 
 
+@dataclass(frozen=True)
+class FileCoverage:
+    """Test coverage of one source file (5.3). Branches are None when the tool reports none."""
+
+    file: str  # relative to the project
+    lines_total: int
+    lines_covered: int
+    branches_total: int | None = None
+    branches_covered: int | None = None
+    uncovered_lines: str = ""  # line numbers not run by any test, as ranges: "3-5, 9"
+
+
+@dataclass
+class CoverageRun:
+    """Measuring the coverage of one suite's tests (5.3), on the state after step 2."""
+
+    suite: str  # Suite.label
+    language: str
+    tool: str  # e.g. "coverage.py", "JaCoCo", "coverlet", "cargo-llvm-cov", "gcovr"
+    status: Status
+    version: str | None = None
+    commands: list[CommandResult] = field(default_factory=list)
+    duration_seconds: float = 0.0
+    files: list[FileCoverage] = field(default_factory=list)  # source files with coverage data
+    not_loaded: list[str] = field(default_factory=list)  # source files without data: no test loaded them
+    notes: list[str] = field(default_factory=list)
+    output_dir: str | None = None  # raw output, relative to the step folder
+
+    @property
+    def totals(self) -> dict[str, int | None]:
+        branches = [file for file in self.files if file.branches_total is not None]
+        return {
+            "files": len(self.files),
+            "files_not_loaded": len(self.not_loaded),
+            "lines_total": sum(file.lines_total for file in self.files),
+            "lines_covered": sum(file.lines_covered for file in self.files),
+            "branches_total": sum(file.branches_total or 0 for file in branches) if branches else None,
+            "branches_covered": sum(file.branches_covered or 0 for file in branches) if branches else None,
+        }
+
+
+# States of the mutation-testing-elements schema (Stryker), used for every tool.
+MUTANT_STATES = ("Killed", "Survived", "NoCoverage", "Timeout", "CompileError", "RuntimeError", "Ignored", "Pending")
+
+
+@dataclass(frozen=True)
+class Mutant:
+    """One mutant of 5.4 and how the tests dealt with it."""
+
+    file: str  # relative to the project
+    line: int | None
+    mutator: str  # the tool's name for the kind of change
+    replacement: str  # the tool's description or the new code
+    status: str  # one of MUTANT_STATES
+    original: str = ""  # the source line, for mutants the tests did not detect
+
+
+@dataclass
+class MutationRun:
+    """Mutation testing of one suite (5.4), on the state after step 2."""
+
+    suite: str  # Suite.label
+    language: str
+    tool: str  # e.g. "mutmut", "StrykerJS", "PIT", "Stryker.NET", "cargo-mutants"
+    status: Status
+    version: str | None = None
+    commands: list[CommandResult] = field(default_factory=list)
+    duration_seconds: float = 0.0
+    mode: str = "sample"  # from config/tests.toml
+    files: list[str] = field(default_factory=list)  # the source files mutated
+    sampled: bool = False  # True if `files` is a sample of the candidates
+    candidates: int = 0  # number of files the sample was drawn from
+    excluded_tests: list[str] = field(default_factory=list)  # tests failing in 5.2, left out
+    mutants: list[Mutant] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    output_dir: str | None = None  # raw output, relative to the step folder
+
+    @property
+    def counts(self) -> dict[str, int]:
+        counts = {state: 0 for state in MUTANT_STATES}
+        for mutant in self.mutants:
+            counts[mutant.status] = counts.get(mutant.status, 0) + 1
+        return counts
+
+    @property
+    def score(self) -> float | None:
+        """detected / valid, as Stryker defines it: (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage)."""
+        counts = self.counts
+        detected = counts["Killed"] + counts["Timeout"]
+        valid = detected + counts["Survived"] + counts["NoCoverage"]
+        return round(detected / valid, 4) if valid else None
+
+
 @dataclass
 class TestingResult:
     __test__ = False  # not a pytest test class
@@ -117,12 +210,15 @@ class TestingResult:
     runs: list[SuiteRun] = field(default_factory=list)  # after step 2: the result
     head_runs: list[SuiteRun] = field(default_factory=list)  # empty when step 2 changed nothing
     differences: list[HeadComparison] = field(default_factory=list)  # only those that differ
+    coverage: list[CoverageRun] = field(default_factory=list)  # after step 2
+    mutation: list[MutationRun] = field(default_factory=list)  # after step 2
     network: bool = False  # the test runs had network
     errors: list[str] = field(default_factory=list)
 
     @property
     def complete(self) -> bool:
-        return not self.errors and all(run.status is not Status.FAILED for run in self.runs)
+        runs = [*self.runs, *self.coverage, *self.mutation]
+        return not self.errors and all(run.status is not Status.FAILED for run in runs)
 
     @property
     def without_tests(self) -> list[Suite]:

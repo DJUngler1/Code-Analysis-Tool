@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE coverage SYSTEM "https://cobertura.sourceforge.net/xml/coverage-04.dtd">
+<coverage branch-rate="0" branches-covered="0" branches-valid="0" complexity="0" line-rate="0.5333333333333333" lines-covered="8" lines-valid="15" timestamp="1794568375" version="2.0.3">
+    <sources>
+        <source>/work/itest/run/step5-tests/workspace</source>
+    </sources>
+    <packages>
+        <package line-rate="0.5333333333333333" branch-rate="0" name="src" complexity="0">
+            <classes>
+                <class branch-rate="0" complexity="0" filename="src/lib.rs" line-rate="0.5333333333333333" name="src.lib.rs">
+                    <methods>
+                        <method name="calc::add" signature="" complexity="0" line-rate="1" branch-rate="1">
+                            <lines>
+                                <line hits="1" number="6" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="calc::sign" signature="" complexity="0" line-rate="0" branch-rate="0">
+                            <lines>
+                                <line hits="0" number="11" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="calc::add" signature="" complexity="0" line-rate="1" branch-rate="1">
+                            <lines>
+                                <line hits="2" number="6" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="calc::sign" signature="" complexity="0" line-rate="0" branch-rate="0">
+                            <lines>
+                                <line hits="0" number="11" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="calc::tests::adds" signature="" complexity="0" line-rate="1" branch-rate="1">
+                            <lines>
+                                <line hits="1" number="24" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="calc::tests::slow" signature="" complexity="0" line-rate="0" branch-rate="0">
+                            <lines>
+                                <line hits="0" number="35" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="calc::tests::broken" signature="" complexity="0" line-rate="1" branch-rate="1">
+                            <lines>
+                                <line hits="1" number="29" branch="false"/>
+                            </lines>
+                        </method>
+                    </methods>
+                    <lines>
+                        <line branch="false" hits="3" number="6"/>
+                        <line branch="false" hits="3" number="7"/>
+                        <line branch="false" hits="3" number="8"/>
+                        <line branch="false" hits="0" number="11"/>
+                        <line branch="false" hits="0" number="12"/>
+                        <line branch="false" hits="0" number="13"/>
+                        <line branch="false" hits="0" number="15"/>
+                        <line branch="false" hits="0" number="17"/>
+                        <line branch="false" hits="1" number="24"/>
+                        <line branch="false" hits="1" number="25"/>
+                        <line branch="false" hits="1" number="26"/>
+                        <line branch="false" hits="1" number="29"/>
+                        <line branch="false" hits="1" number="30"/>
+                        <line branch="false" hits="0" number="31"/>
+                        <line branch="false" hits="0" number="35"/>
+                    </lines>
+                </class>
+            </classes>
+        </package>
+    </packages>
+</coverage>

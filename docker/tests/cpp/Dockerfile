@@ -1,21 +1,27 @@
 # Test image for C and C++ (step 5): clang 22, CMake/CTest, Ninja, Conan and
-# vcpkg, as in lint-cpp (step 2), to configure, build and run the CTest tests.
+# vcpkg, as in lint-cpp (step 2), to configure, build and run the CTest tests;
+# llvm-cov 22, compiler-rt (the runtime of clang's --coverage) and gcovr for
+# the test coverage.
 # Definition: docs/testAnalysis/README.md
 FROM debian:trixie-slim
 
 ARG CONAN_VERSION=2.34.0
+ARG GCOVR_VERSION=8.8
 ARG VCPKG_TAG=2026.10.16
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        clang-22 libc6-dev libstdc++-14-dev \
+        clang-22 llvm-22 libclang-rt-22-dev libc6-dev libstdc++-14-dev \
         cmake ninja-build make pkg-config git ca-certificates curl zip unzip tar \
         python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /opt/conan \
     && /opt/conan/bin/pip install --no-cache-dir "conan==${CONAN_VERSION}" \
-    && ln -s /opt/conan/bin/conan /usr/local/bin/conan
+    && ln -s /opt/conan/bin/conan /usr/local/bin/conan \
+    && python3 -m venv /opt/gcovr \
+    && /opt/gcovr/bin/pip install --no-cache-dir "gcovr==${GCOVR_VERSION}" \
+    && ln -s /opt/gcovr/bin/gcovr /usr/local/bin/gcovr
 
 # vcpkg runs as the host user: its root must be writable (buildtrees, packages).
 # On arm64 Linux, vcpkg needs the system cmake/ninja instead of its own downloads.
@@ -39,6 +45,8 @@ RUN mkdir -p /opt/code-analysis && { \
         printf 'clang\t%s\n' "$(clang-22 --version | head -n 1)"; \
         printf 'cmake\t%s\n' "$(cmake --version | head -n 1)"; \
         printf 'ctest\t%s\n' "$(ctest --version | head -n 1)"; \
+        printf 'llvm-cov\t%s\n' "$(llvm-cov-22 --version | grep -i 'version' | head -n 1 | sed 's/^ *//')"; \
+        printf 'gcovr\t%s\n' "$(gcovr --version | head -n 1)"; \
         printf 'conan\t%s\n' "$(conan --version)"; \
         printf 'vcpkg\t%s\n' "$(vcpkg version | head -n 1)"; \
     } > /opt/code-analysis/versions.tsv

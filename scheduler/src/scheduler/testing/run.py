@@ -6,14 +6,22 @@ noted in the report.
 5.2 runs the tests of each suite in a container of its language's test image,
 on a copy of the project as step 2 left it. If step 2 changed the project,
 they also run on a copy of the last commit (HEAD), and the results are
-compared. Results go into the run folder:
+compared.
+5.3 measures the test coverage of each suite after step 2, with one tool per
+language.
+5.4 tests the tests with mutants (one tool per language, a sample of the
+covered files or all files, with a time limit). Results go into the run folder:
 
 <OUTPUT_DIR>/<project>/<date_time>/
   step5-tests/
     summary.json      the suites, the test runs and their counts, differences to HEAD (if any)
     tests.json        every test after step 2 and how it ended
+    coverage.json     coverage per source file, and the source files no test loaded
+    mutants.json      every mutant: file, line, mutator, change, state; the source line of undetected ones
     <nn>-<language>-<folder>/run/       raw output of the run (logs, reports)
     <nn>-<language>-<folder>/run-head/  the same for the run at HEAD
+    <nn>-<language>-<folder>/coverage/  raw output of the coverage run
+    <nn>-<language>-<folder>/mutation/  raw output of the mutation run
 """
 
 from __future__ import annotations
@@ -32,7 +40,7 @@ from scheduler.testing import execute
 from scheduler.testing.config import ConfigError, TestsConfig, load_config
 from scheduler.testing.context import TestContext
 from scheduler.testing.detect import LANGUAGE_GROUPS, detect_suites
-from scheduler.testing.model import Suite, SuiteRun, TestingResult
+from scheduler.testing.model import CoverageRun, MutationRun, Suite, SuiteRun, TestingResult
 
 STEP_DIR = "step5-tests"
 
@@ -77,7 +85,7 @@ def run_tests(
         else:
             out("\n  Running the tests " + ("WITH network (config/tests.toml: network = true)"
                                           if config.network else "without network") + " ...")
-            ctx = TestContext(acceptance.project, step_dir, acceptance, runner, settings, config, out)
+            ctx = TestContext(acceptance.project, step_dir, acceptance, runner, settings, config, out, result.suites)
             execute.run_suites(ctx, tested, result)
     _write_results(result, acceptance, config, started, now())
     return result
@@ -125,11 +133,25 @@ def _write_results(result: TestingResult, acceptance: AcceptanceResult, config: 
         if result.differences:  # only mentioned when the states differ
             tests["differences_to_head"] = [asdict(comparison) for comparison in result.differences]
         summary["tests"] = tests
+        summary["coverage"] = [_coverage_summary(coverage) for coverage in result.coverage]
+        summary["mutation"] = {
+            "mode": config.mutation.mode,
+            "sample_files": config.mutation.sample_files,
+            "seed": config.mutation.seed,
+            "time_limit_minutes": config.mutation.time_limit_minutes,
+            "runs": [_mutation_summary(mutation) for mutation in result.mutation],
+        }
     step_dir = result.run_dir / STEP_DIR
     _write_json(step_dir / "summary.json", summary)
     if config is not None:
         _write_json(step_dir / "tests.json", [{"suite": run.suite, **asdict(test)}
                                               for run in result.runs for test in run.tests])
+        _write_json(step_dir / "coverage.json", [
+            {"suite": coverage.suite, "files": [asdict(file) for file in coverage.files],
+             "not_loaded": coverage.not_loaded}
+            for coverage in result.coverage if coverage.files or coverage.not_loaded])
+        _write_json(step_dir / "mutants.json", [{"suite": mutation.suite, **asdict(mutant)}
+                                                for mutation in result.mutation for mutant in mutation.mutants])
 
 
 def _run_summary(run: SuiteRun) -> dict:
@@ -154,6 +176,54 @@ def _run_summary(run: SuiteRun) -> dict:
         ],
         "notes": run.notes,
         "output_dir": run.output_dir,
+    }
+
+
+def _coverage_summary(coverage: CoverageRun) -> dict:
+    totals = coverage.totals
+    return {
+        "suite": coverage.suite,
+        "language": coverage.language,
+        "tool": coverage.tool,
+        "version": coverage.version,
+        "status": coverage.status.value,
+        "duration_seconds": coverage.duration_seconds,
+        **totals,
+        "line_rate": round(totals["lines_covered"] / totals["lines_total"], 4) if totals["lines_total"] else None,
+        "branch_rate": (round(totals["branches_covered"] / totals["branches_total"], 4)
+                        if totals["branches_total"] else None),
+        "commands": [
+            {"command": list(command.command), "exit_code": command.exit_code,
+             "duration_seconds": round(command.duration_seconds, 1), "timed_out": command.timed_out}
+            for command in coverage.commands
+        ],
+        "notes": coverage.notes,
+        "output_dir": coverage.output_dir,
+    }
+
+
+def _mutation_summary(mutation: MutationRun) -> dict:
+    return {
+        "suite": mutation.suite,
+        "language": mutation.language,
+        "tool": mutation.tool,
+        "version": mutation.version,
+        "status": mutation.status.value,
+        "duration_seconds": mutation.duration_seconds,
+        "files": mutation.files,
+        "sampled": mutation.sampled,
+        "candidate_files": mutation.candidates,
+        "excluded_tests": mutation.excluded_tests,
+        "mutants": len(mutation.mutants),
+        "counts": mutation.counts,
+        "score": mutation.score,
+        "commands": [
+            {"command": list(command.command), "exit_code": command.exit_code,
+             "duration_seconds": round(command.duration_seconds, 1), "timed_out": command.timed_out}
+            for command in mutation.commands
+        ],
+        "notes": mutation.notes,
+        "output_dir": mutation.output_dir,
     }
 
 

@@ -277,18 +277,19 @@ def _generate_script(session: ToolSession) -> tuple[str, str]:
     return cmake_configure_script(session.ctx.project, session.ctx.manifests("C", "C++"))
 
 
-def cmake_configure_script(project: Path, manifests: list[Path], *, build_type: str = "Release") -> tuple[str, str]:
+def cmake_configure_script(project: Path, manifests: list[Path], *, build_type: str = "Release",
+                           cmake_options: str = "") -> tuple[str, str]:
     """Shell script ($1 = project, $2 = build folder) that configures the CMake build.
 
     Dependencies come from Conan (installed into $2/conan-home) or vcpkg (its
     CMake toolchain), whichever manifest step 1 found first. Also used by the
-    tests (step 5) with build_type "Debug".
+    tests (step 5) with build_type "Debug" and, for the coverage, compiler options.
     """
     manifests = sorted(manifests, key=lambda path: (len(path.parts), path.as_posix()))
     conan = next((path for path in manifests if path.name in ("conanfile.txt", "conanfile.py")), None)
     vcpkg = next((path for path in manifests if path.name == "vcpkg.json"), None)
     cmake = (f'cmake -S "$1" -B "$2" -G Ninja -DCMAKE_BUILD_TYPE={build_type} '
-             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON" + (f" {cmake_options}" if cmake_options else ""))
 
     if conan is not None:
         text = (project / conan).read_text(encoding="utf-8", errors="replace")

@@ -61,7 +61,7 @@ services:
         bind:
           create_host_path: true
       # Tool configuration (config/opengrep.toml: OpenGrep's rule sets;
-      # config/tests.toml: network and time limit of the tests), read at each
+      # config/tests.toml: network, time limits and mutation scope of the tests), read at each
       # run: changes need no rebuild of the scheduler.
       - type: bind
         source: ../config

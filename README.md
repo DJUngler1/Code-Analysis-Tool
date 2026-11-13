@@ -60,7 +60,7 @@ Language shares are bytes of source code per language, as on GitHub. A `.h` file
 | 5 | Step 2 incomplete: `OUTPUT_DIR`, Docker or a tool image missing, a tool failed, or a project file could not be moved back |
 | 6 | Step 3 incomplete: OpenGrep or SonarQube failed, e.g. `config/opengrep.toml` invalid, a tool image missing or outdated, the SonarQube server not running or `SONARQUBE_ADMIN_PASSWORD` missing |
 | 7 | Step 4 incomplete: Docker or a tool image missing, a dependency check failed, or a lock file could not be generated (completely) |
-| 8 | Step 5 incomplete: `config/tests.toml` invalid, Docker or a test image missing, or the tests of a suite could not be run (e.g. the build failed) |
+| 8 | Step 5 incomplete: `config/tests.toml` invalid, Docker or a test image missing, or the tests of a suite could not be run (e.g. the build failed) or their coverage or mutation testing failed |
 | 125 | (`bin/code-analysis` only) Docker or the container is not running |
 
 ### Linters and formatters (step 2)
@@ -143,7 +143,7 @@ After step 3, the project's dependencies are checked for known vulnerabilities, 
 
 ### Tests (step 5)
 
-After step 4, the tool finds and runs the project's tests, as defined in [docs/testAnalysis/README.md](docs/testAnalysis/README.md). Measuring the coverage and mutation testing will follow.
+After step 4, the tool finds and runs the project's tests, measures their coverage and tests them with mutants, as defined in [docs/testAnalysis/README.md](docs/testAnalysis/README.md).
 
 - **Finding the tests:**
   - A test suite holds the tests of one build unit, e.g. a Python project, a `package.json`, a Maven or Gradle build, a .NET test project, a Cargo workspace or a CMake project.
@@ -159,12 +159,18 @@ After step 4, the tool finds and runs the project's tests, as defined in [docs/t
   - To let the tests use the network, set `network = true` in [`config/tests.toml`](config/tests.toml). Only do this if you trust the project's code.
   - The same file sets the time limit per test run (`time_limit_minutes`, default 60, `0` for no limit). The tool reads it at every run.
 - **Changes of step 2:** if step 2 changed the project, the tests also run on the last commit (HEAD), and tests that end differently are listed. Without differences, nothing is reported.
+- **Coverage:** after the tests, a second run measures the line and branch coverage with one tool per language: coverage.py, Jest/Vitest/c8, JaCoCo, coverlet, cargo-llvm-cov, gcovr. There is no minimum. It counts the program's source files, not the tests; source files no test loaded are listed.
+- **Mutation testing:** mutmut, StrykerJS, PIT, Stryker.NET and cargo-mutants change the source code in small ways and check whether the tests notice. Tests that failed are left out where the tool allows it (StrykerJS cannot: such suites are skipped). C/C++ is not supported. `[mutation]` in [`config/tests.toml`](config/tests.toml) sets the scope and the time limit:
+  - `mode = "sample"` (default): a reproducible random sample of `sample_files` (default 20) source files the tests cover. `mode = "full"`: every source file, which can take hours on large projects.
+  - `time_limit_minutes` (default 60, `0` for no limit) per mutation run; results written until then are kept.
 
 | Path | Content |
 |---|---|
-| `step5-tests/summary.json` | The test suites (language, folder, package manager or build tool, frameworks, test files), the languages without tests and those not checked; per test run: tool, version, status, number of tests per outcome, failed tests, commands, notes; differences to HEAD if any |
+| `step5-tests/summary.json` | The test suites (language, folder, package manager or build tool, frameworks, test files), the languages without tests and those not checked; per test run: tool, version, status, number of tests per outcome, failed tests, commands, notes; differences to HEAD if any; coverage and mutation score per suite |
 | `step5-tests/tests.json` | Every test: suite, id, outcome (`passed`, `failed`, `error`, `skipped`), duration, failure message |
-| `step5-tests/<nn>-<language>-<folder>/` | Logs and raw reports of each run (`run/`, and `run-head/` for the comparison) |
+| `step5-tests/coverage.json` | Coverage per source file: lines, branches, uncovered line numbers; source files no test loaded |
+| `step5-tests/mutants.json` | Every mutant: file, line, kind, change, state (`Killed`, `Survived`, `NoCoverage`, …); the source line of mutants the tests did not detect |
+| `step5-tests/<nn>-<language>-<folder>/` | Logs and raw reports of each run (`run/`, `run-head/` for the comparison, `coverage/`, `mutation/`) |
 
 ### Ollama
 

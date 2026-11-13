@@ -4,8 +4,8 @@ This document defines step 5 of the workflow, "Tests" (see `docs/toolflow_en.png
 
 1. **Find the tests** ("Tests present?"): done.
 2. **Run the tests** ("Document results, including failures"): done.
-3. Measure the test coverage: planned.
-4. Mutation testing: planned.
+3. **Measure the test coverage** ("no minimum coverage"): done.
+4. **Mutation testing**: done.
 
 ## 1. Finding the tests
 
@@ -140,6 +140,89 @@ Each test has an id that is the same in both states, its outcome (`passed`, `fai
 
 Python projects get `SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0`: the copy is a git repository without commits, so setuptools-scm cannot derive a version from it. Conda environments are not supported (`skipped`).
 
+## 3. Measuring the test coverage
+
+Right after the tests of a suite (state after step 2), the coverage is measured in a run of its own, in the same copy (the dependencies and builds are already there). The instrumentation must not change the test results of part 2, and the run at HEAD has no coverage. It runs offline like the tests; only adding the coverage tool to the copy has network. A suite whose tests did not run is not measured (`skipped`).
+
+One tool per language, the same for every project:
+
+| Language | Tool | How | Lines | Branches |
+|---|---|---|---|---|
+| Python | coverage.py 7.17.3 (the project's own version if its environment has one) | `coverage run --rcfile=<own settings: branch = True> -m pytest -p no:cov …`, then `coverage xml`; the project's coverage settings are not used | yes | yes |
+| JavaScript, TypeScript (Jest) | Jest's built-in coverage | `jest … --coverage --coverageReporters=cobertura --coverageDirectory=<out>` | yes | yes |
+| JavaScript, TypeScript (Vitest) | `@vitest/coverage-v8` in the version of the project's Vitest (added to the copy) | `vitest run … --coverage.enabled=true --coverage.provider=v8 --coverage.reporter=cobertura --coverage.reportOnFailure=true` | yes | yes |
+| JavaScript, TypeScript (Mocha, `node:test`, other test scripts) | c8 12.0.0 (V8 coverage) | `c8 --reporter=cobertura <test command>` | yes | yes |
+| JavaScript, TypeScript (Bun) | – | not measured (`skipped`) | – | – |
+| Java | JaCoCo 0.8.16 | Maven: `mvn -o org.jacoco:jacoco-maven-plugin:0.8.16:prepare-agent test org.jacoco:jacoco-maven-plugin:0.8.16:report`; Gradle: an init script applies the `jacoco` plugin (`toolVersion` 0.8.16, XML report, `ignoreFailures` for the tests), then `<test tasks> <jacocoTestReport tasks>` | yes | yes |
+| C# | coverlet 10.1.0 (`coverlet.collector`, added to the copy unless the test project has it) | `dotnet test … --collect "XPlat Code Coverage"` with `DOTNET_ROLL_FORWARD=LatestMajor`; Microsoft.Testing.Platform mode: not measured | yes | yes |
+| Rust | cargo-llvm-cov 0.9.1 (LLVM source-based coverage) | `cargo llvm-cov --workspace --ignore-run-fail --offline --cobertura` | yes | no (needs nightly); doctests not measured |
+| C, C++ | gcovr 8.8 with llvm-cov 22 | a second CMake build (Debug) with `--coverage`, CTest, then `gcovr --gcov-executable "llvm-cov-22 gcov" --cobertura` | yes | yes |
+
+Failing tests do not stop the measurement (`maven.test.failure.ignore`, `ignoreFailures`, `--ignore-run-fail`, `reportOnFailure`). There is no minimum coverage.
+
+**C#:** coverlet's collector runs on the runtime of the .NET SDK and received no data from a test host on an older runtime (`net8.0`). The coverage run therefore uses the newest runtime of the image (`DOTNET_ROLL_FORWARD=LatestMajor`); the test run of part 2 uses the runtime the project targets.
+
+### Which files count
+
+The coverage of a suite counts the source files of its language below its folder, without:
+
+- test code: the test files of part 1, files in test folders (`test/`, `tests/`, `__tests__/`, `spec/`, `testing/`, `unittest/`, `benches/`, `src/test/`, `androidTest/`, …) and `conftest.py`;
+- generated files (step 1) and files of nested suites of the same language (e.g. a `package.json` further down);
+- build scripts and tool configuration (`setup.py`, `noxfile.py`, `build.rs`, `*.config.js`, `.d.ts`), documentation and examples (`docs/`, `examples/`, …).
+
+For C#, a suite is a test project: its source files are the C# files outside the test projects. Rust's source files with `#[cfg(test)]` modules count as source files, including those modules.
+
+Files of the report outside this list (e.g. test files, files outside the project) are left out. Source files without any coverage data were not loaded by any test; they are listed as `not_loaded` (for C/C++ only `.c`/`.cpp` files, not headers). Their lines are not counted, because only the tools know which lines are executable. JaCoCo reports every class of a tested module, also classes no test ran (with 0 covered lines); for Java, `not_loaded` are therefore the files of modules without a coverage report.
+
+Per file the result has the lines (executable lines and lines run by a test), the branches if the tool reports them, and the line numbers no test ran (`"6-8, 12"`). The rates in `summary.json` are covered / total over the files with data.
+
+## 4. Mutation testing
+
+After the coverage, the tests of each suite are tested with mutants (small changes to the source code): a test suite that does not fail for a mutant did not detect that change. It runs in the same copy (state after step 2), offline like the tests; adding the tool to the copy has network.
+
+| Language | Tool | How the files are selected | How failing tests are left out |
+|---|---|---|---|
+| Python | mutmut 3.8.1 (added to `.venv`) | `source_paths` in `[tool.mutmut]` of the copy's `pyproject.toml` (replacing the project's own) | `pytest_add_cli_args_test_selection = ["--deselect", "<node id>", …]` |
+| JavaScript, TypeScript | StrykerJS 10.1.1 with the runner of the framework (`jest`, `vitest`, `mocha`; otherwise the command runner with the test command), added to the copy | `mutate` in an own Stryker configuration file (the project's is not used) | not possible: the suite is `skipped` if a test failed |
+| Java | PIT 1.30.2 (with `pitest-junit5-plugin` 1.2.3 for JUnit Jupiter). Maven: `pitest-maven` added to `<build><plugins>` of the copy's `pom.xml`, `mvn -o test-compile org.pitest:pitest-maven:1.30.2:mutationCoverage`; Gradle: `gradle-pitest-plugin` 1.19.0 from an init script, the `pitest` task of each Java project | `targetClasses` (the classes of the files and their nested classes), `targetTests=*` | `skipFailingTests` |
+| C# | Stryker.NET 5.1.0, in the test project's folder; with several referenced projects the one with the most selected files (`--project`) | `--mutate **/<path>` | `--test-case-filter "FullyQualifiedName!=<test>&…"` |
+| Rust | cargo-mutants 27.1.0 | `--file <path>` | `-- -- --skip <test>` (passed to the test binaries) |
+| C, C++ | – | not supported (`skipped`) | – |
+
+Every tool uses its default mutators.
+
+### Which files are mutated
+
+`[mutation]` in `config/tests.toml`, read at every run:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `mode` | `"sample"` | `"sample"`: a random sample of the source files the tests cover (part 3: at least one line run by a test), drawn with a fixed seed, so the same project gives the same sample. `"full"`: every source file of the suite (as counted in part 3) |
+| `sample_files` | `20` | Size of the sample per suite; a suite with fewer covered files mutates all of them |
+| `seed` | `1` | Seed of the sample |
+| `time_limit_minutes` | `60` | Time limit of each mutation run; `0` means no limit |
+
+Without coverage data (part 3 failed), the sample is drawn from all source files of the suite. The selected files, whether they are a sample, and the number of candidates are in `summary.json`.
+
+**Time limit:** when it is reached, the container is stopped and the run gets `partial` with the mutants evaluated so far: mutmut and cargo-mutants write their results while they run; PIT, StrykerJS and Stryker.NET only at the end, so they have none then (noted). The configured limit does not make step 5 incomplete.
+
+### Results
+
+Each mutant has its file, line, the tool's mutator, the change (the tool's description or the new code), and its state. The states follow the mutation-testing-elements schema of Stryker; the other tools are mapped to it:
+
+| State | mutmut | PIT | cargo-mutants |
+|---|---|---|---|
+| `Killed` | killed | KILLED | CaughtMutant |
+| `Survived` | survived | SURVIVED | MissedMutant |
+| `NoCoverage` | no tests | NO_COVERAGE | – |
+| `Timeout` | timeout | TIMED_OUT | Timeout |
+| `CompileError` | caught by type check | NON_VIABLE | Unviable |
+| `RuntimeError` | suspicious, segfault | MEMORY_ERROR, RUN_ERROR | – |
+| `Ignored` | skipped | EQUIVALENT | – |
+| `Pending` | not checked | NOT_STARTED, STARTED | – |
+
+**Score:** detected / valid mutants, as Stryker defines it: (`Killed` + `Timeout`) / (`Killed` + `Timeout` + `Survived` + `NoCoverage`). Mutants that did not compile, ended with an error, were ignored or not run do not count. For `Survived` and `NoCoverage` mutants, the source line is stored too (for step 6). mutmut gives the line only for those: its line of killed mutants is empty.
+
 ## Status
 
 | Situation | Result |
@@ -157,7 +240,11 @@ Status of a test run:
 | `failed` | No test result: the build failed, the report is missing, or the time limit was reached before any result |
 | `skipped` | Not run: Conda, or JavaScript tests that need a browser |
 
-Step 5 is incomplete (exit code 8) if detection failed, `config/tests.toml` is invalid, Docker or a test image is missing, or a run is `failed`.
+Status of a coverage run: `ok` (report read), `partial` (time limit reached), `failed` (no report), `skipped` (the tests did not run, or no tool for the framework).
+
+Status of a mutation run: `ok` (report read), `partial` (time limit reached), `failed` (the tool wrote no report), `skipped` (the tests did not run, StrykerJS with failing tests, C/C++).
+
+Step 5 is incomplete (exit code 8) if detection failed, `config/tests.toml` is invalid, Docker or a test image is missing, or a test, coverage or mutation run is `failed`.
 
 ## Results
 
@@ -165,7 +252,11 @@ Step 5 writes into the run folder of step 2: `OUTPUT_DIR/<project>/<date_time>Z/
 
 | Path | Content |
 |---|---|
-| `summary.json` | `detection`: the test suites (language, folder, package manager or build tool, manifest, `tests_found`, frameworks, `test_files`, `inline_test_files`, evidence, notes), `languages_without_tests`, `languages_not_checked`. `tests`: network and time limit, per run the tool, version, status, duration, number of tests per outcome, the failed tests, commands with exit codes, notes; `differences_to_head` only if the states differ |
+| `summary.json` | `detection`: the test suites (language, folder, package manager or build tool, manifest, `tests_found`, frameworks, `test_files`, `inline_test_files`, evidence, notes), `languages_without_tests`, `languages_not_checked`. `tests`: network and time limit, per run the tool, version, status, duration, number of tests per outcome, the failed tests, commands with exit codes, notes; `differences_to_head` only if the states differ. `coverage`: per suite the tool, version, status, files, files not loaded, lines and branches (total, covered, rate), commands, notes. `mutation`: the settings, and per suite the tool, version, status, mutated files, sample yes/no, candidates, excluded tests, mutants per state, score, commands, notes |
 | `tests.json` | Every test of the runs after step 2: suite, id, outcome, duration, message |
+| `coverage.json` | Per suite: each source file with lines, covered lines, branches, covered branches, uncovered lines; the source files not loaded by any test |
+| `mutants.json` | Every mutant: suite, file, line, mutator, change, state, source line (undetected mutants) |
 | `<nn>-<language>-<folder>/run/` | Logs of each command (`<label>.stdout.txt`, `<label>.stderr.txt`) and the raw reports of the run after step 2 |
 | `<nn>-<language>-<folder>/run-head/` | The same for the run at HEAD (only if step 2 changed the project) |
+| `<nn>-<language>-<folder>/coverage/` | Logs and the raw coverage report(s) |
+| `<nn>-<language>-<folder>/mutation/` | Logs, the settings written for the tool and its raw report |

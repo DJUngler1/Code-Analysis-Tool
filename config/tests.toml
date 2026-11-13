@@ -3,11 +3,25 @@
 # The tool reads this file at the start of every run: changes need no rebuild.
 
 [tests]
-# Network for the test runs. Tests execute the project's code. Without
+# Network for the test runs (also those for coverage and mutation testing).
+# Tests execute the project's code. Without
 # network they can reach neither the internet nor services in your local
 # network. Only set this to true if you trust the project's code.
 # Downloading the dependencies before the tests always has network.
 network = false
 
 # Time limit of each test run, in minutes. 0 means no limit.
+time_limit_minutes = 60
+
+[mutation]
+# Mutation testing (part 4 of step 5). "sample": a random sample of the
+# source files the tests cover (fixed seed, so the sample is reproducible);
+# "full": every source file of the suite. Full runs can take hours to days on
+# large projects.
+mode = "sample"
+sample_files = 20   # source files per test suite in mode "sample"
+seed = 1
+
+# Time limit of each mutation run, in minutes. 0 means no limit. When it is
+# reached, the run stops and keeps the results written so far.
 time_limit_minutes = 60

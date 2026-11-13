@@ -19,6 +19,7 @@ from scheduler.paths import PathError, resolve_project_path
 from scheduler.static_analysis import AnalysisResult, run_static_analysis
 from scheduler.static_analysis.run import STEP_DIR as ANALYSIS_STEP_DIR
 from scheduler.testing import TestingResult, run_tests
+from scheduler.testing.execute import describe_coverage, describe_mutation
 from scheduler.testing.run import STEP_DIR as TESTS_STEP_DIR
 from scheduler.testing.run import languages_without_tests
 
@@ -278,6 +279,10 @@ def format_tests(result: TestingResult) -> str:
     for run in result.runs:
         counts = ", ".join(f"{count} {outcome}" for outcome, count in run.counts.items() if count)
         lines.append(f"{run.suite}: {run.status.value}" + (f", {counts}" if counts else ""))
+    for coverage in result.coverage:
+        lines.append(f"{coverage.suite}: coverage {describe_coverage(coverage)}")
+    for mutation in result.mutation:
+        lines.append(f"{mutation.suite}: mutation testing {describe_mutation(mutation)}")
     failing = sum(run.counts["failed"] + run.counts["error"] for run in result.runs)
     if failing and not result.network:
         lines.append(f"{failing} tests failed. The tests ran without network (config/tests.toml); "
@@ -296,6 +301,9 @@ def format_tests(result: TestingResult) -> str:
     if result.differences:
         lines.append("Differences can come from the changes of step 2 or from flaky tests.")
     failed = [run.suite for run in result.runs if run.status is Status.FAILED]
+    failed += [f"coverage of {coverage.suite}" for coverage in result.coverage if coverage.status is Status.FAILED]
+    failed += [f"mutation testing of {mutation.suite}" for mutation in result.mutation
+               if mutation.status is Status.FAILED]
     if failed:
         lines.append(f"Failed: {', '.join(failed)} (see the notes above and summary.json).")
     lines += [f"Error: {error}" for error in result.errors]

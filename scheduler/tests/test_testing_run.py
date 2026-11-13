@@ -17,7 +17,7 @@ from scheduler.testing import run_tests
 from scheduler.testing.config import ConfigError, TestsConfig, load_config
 from scheduler.testing.execute import compare_runs
 from scheduler.testing.languages import javascript, python
-from scheduler.testing.model import SuiteRun, TestCase, TestingResult
+from scheduler.testing.model import Mutant, SuiteRun, TestCase, TestingResult
 from scheduler.testing.reports import parse_jest, parse_junit, parse_libtest, parse_trx
 from scheduler.workspace import prepare_head_workspace
 
@@ -238,12 +238,27 @@ class FakeRunner:
         for word in command:
             if word.startswith("--junitxml="):
                 Path(word.split("=", 1)[1]).write_text(self.junit)
+        if "mutmut results" in text:  # mutmut's states and the diff of the undetected mutant
+            return CommandResult(tuple(command), 0, MUTMUT_OUTPUT, "", 0.1)
+        if "coverage" in command and "xml" in command:  # coverage.py's report, with the copy as source folder
+            report = (FIXTURES / "coverage-py.xml").read_text().replace("/work/itest/run/step5-tests/workspace",
+                                                                        str(workdir))
+            Path(command[command.index("-o") + 1]).write_text(report)
         stdout = "platform linux -- Python 3.13.18, pytest-9.2.0, pluggy-1.6.0\n" if "pytest" in text else ""
         return CommandResult(tuple(command), 1 if "pytest" in text else 0, stdout, "", 0.1)
 
 
+MUTMUT_OUTPUT = ("    calc.x_add__mutmut_1: killed\n    calc.x_sign__mutmut_1: no tests\n"
+                 "=== code-analysis diffs\n=== calc.x_sign__mutmut_1\n--- calc/__init__.py\n+++ calc/__init__.py\n"
+                 "@@ -1,4 +1,4 @@\n def sign(x):  # not tested\n-    if x < 0:\n+    if x <= 0:\n         return -1\n"
+                 "     return 1\n")
+
+
 def python_project(make_project):
     project = make_project({"requirements.txt": "", "app.py": "x = 1\n" * 50,
+                            "calc/__init__.py": ("def add(a, b):\n    return a + b\n\n\n"
+                                                 "def sign(x):  # not tested\n    if x < 0:\n        return -1\n"
+                                                 "    return 1\n"),
                             "test_app.py": "def test_x():\n    assert True\n"})
     commit_all(project)
     return project
@@ -261,10 +276,16 @@ def test_run_tests_online_download_then_offline_tests(make_project, tmp_path):
     result = run_tests(run_acceptance(project), settings(), tmp_path / "run", runner=runner, now=lambda: NOW,
                        out=lines.append)
     assert result.complete and result.network is False
-    install, pytest_call = runner.calls
+    install, pytest_call, coverage_install, coverage_run, coverage_xml, *mutation_calls = runner.calls
+    mutmut_install, mutmut_run, _ = mutation_calls
+    assert mutmut_install["network"] == "code-analysis-net" and mutmut_run["network"] == "none"
+    assert mutmut_run["command"] == [".venv/bin/mutmut", "run"] and mutmut_run["timeout"] == 3600
     assert install["network"] == "code-analysis-net" and install["timeout"] == 3600
     assert pytest_call["network"] == "none" and pytest_call["timeout"] == 3600
     assert pytest_call["command"][:3] == [".venv/bin/python", "-m", "pytest"]
+    assert coverage_install["network"] == "code-analysis-net"  # coverage.py is added online if missing
+    assert coverage_run["network"] == coverage_xml["network"] == "none"
+    assert coverage_run["command"][:4] == [".venv/bin/python", "-m", "coverage", "run"]
     step = tmp_path / "run" / "step5-tests"
     assert all(call["mounts"] == [step] for call in runner.calls)  # only the step folder, never the project
     assert all(str(call["workdir"]).startswith(str(step / "workspace")) for call in runner.calls)
@@ -282,8 +303,27 @@ def test_run_tests_online_download_then_offline_tests(make_project, tmp_path):
     assert tests[0] == {"suite": "Python (requirements.txt)", "id": "tests.test_calc.test_add", "outcome": "passed",
                         "duration_seconds": 0.0, "message": ""}
     assert any("Running the tests without network" in line for line in lines)
+    (coverage,) = result.coverage
+    assert coverage.status is Status.OK and coverage.version == "coverage.py 7.17.3"
+    assert [(file.file, file.lines_covered, file.lines_total) for file in coverage.files] == [
+        ("calc/__init__.py", 3, 6)]
+    assert coverage.not_loaded == ["app.py"]  # no test loaded it; test_app.py is test code
+    assert summary["coverage"][0]["line_rate"] == 0.5 and summary["coverage"][0]["branch_rate"] == 0.0
+    assert json.loads((step / "coverage.json").read_text())[0]["files"][0]["uncovered_lines"] == "6-8"
+    (mutation,) = result.mutation
+    assert mutation.status is Status.OK and mutation.files == ["calc/__init__.py"] and not mutation.sampled
+    assert mutation.excluded_tests == []  # the failing tests of the fixture are in no file of this project
+    assert mutation.mutants[1] == Mutant("calc/__init__.py", 6, "mutmut", "if x <= 0:", "NoCoverage", "if x < 0:")
+    mutation_summary = summary["mutation"]
+    assert mutation_summary["mode"] == "sample" and mutation_summary["time_limit_minutes"] == 60
+    assert mutation_summary["runs"][0]["score"] == 0.5 and mutation_summary["runs"][0]["counts"]["Killed"] == 1
+    assert json.loads((step / "mutants.json").read_text())[1]["original"] == "if x < 0:"
     text = format_tests(result)
     assert "Python (requirements.txt): ok, 2 passed, 2 failed, 1 skipped" in text
+    assert ("Python (requirements.txt): coverage ok, lines 50.0% (3/6), branches 0.0% (0/2), "
+            "1 of 2 source files not loaded by any test") in text
+    assert ("Python (requirements.txt): mutation testing ok, 2 mutants in 1 files, 1 Killed, 1 NoCoverage, "
+            "score 50.0%") in text
     assert "2 tests failed. The tests ran without network (config/tests.toml)" in text
     assert "HEAD" not in text
 
@@ -295,8 +335,10 @@ def test_run_tests_compares_with_head_after_changes(make_project, tmp_path):
     (project / "app.py").write_text("x = 2\n")  # what step 2 changed
     runner = FakeRunner()
     result = run_tests(acceptance, settings(), tmp_path / "run", runner=runner, now=lambda: NOW, out=lambda _: None)
-    assert len(runner.calls) == 4  # install and pytest, after step 2 and at HEAD
-    assert str(runner.calls[2]["workdir"]).endswith("workspace-head")
+    # After step 2: install, pytest, 3 for the coverage, 3 for mutmut; at HEAD: install, pytest.
+    assert len(runner.calls) == 10
+    assert str(runner.calls[8]["workdir"]).endswith("workspace-head")
+    assert len(result.coverage) == len(result.mutation) == 1  # only after step 2
     assert result.differences == []  # same results in both states
     assert "HEAD" not in format_tests(result)
 
@@ -310,6 +352,7 @@ def test_run_tests_with_network_from_the_configuration(make_project, tmp_path):
     result = run_tests(run_acceptance(project), settings(tmp_path / "config"), tmp_path / "run", runner=runner,
                        now=lambda: NOW, out=lambda _: None)
     assert runner.calls[1]["network"] == "code-analysis-net" and runner.calls[1]["timeout"] is None
+    assert runner.calls[3]["network"] == "code-analysis-net"  # the coverage run as well
     assert "Warning: the tests ran with network" in format_tests(result)
 
 
@@ -324,6 +367,9 @@ def test_failed_install_and_missing_report(make_project, tmp_path):
     assert run.notes[0].startswith("installing the project with pip failed (exit code 2: broke)")
     assert run.notes[-1].startswith("pytest failed (exit code 2")
     assert "Failed: Python (requirements.txt)" in format_tests(result)
+    (coverage,) = result.coverage
+    assert coverage.status is Status.SKIPPED and coverage.notes == ["not measured: the tests did not run"]
+    assert result.mutation[0].status is Status.SKIPPED
 
 
 @requires_git

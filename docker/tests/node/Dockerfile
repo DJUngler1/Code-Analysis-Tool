@@ -1,17 +1,21 @@
 # Test image for JavaScript/TypeScript (step 5): Node.js with npm, Yarn and
-# pnpm (corepack) and Bun, to install the project and run its test framework.
+# pnpm (corepack) and Bun, to install the project and run its test framework;
+# c8 for the test coverage of frameworks without their own (Mocha, node:test).
 # The full image (not -slim) has Python, make and a C++ compiler for native
 # addons (node-gyp). No browsers: Playwright, Cypress and Karma are not run.
 # Definition: docs/testAnalysis/README.md
 FROM node:22.23.4
 
 ARG BUN_VERSION=1.4.4
+ARG C8_VERSION=12.0.0
 # Set by BuildKit: amd64 or arm64.
 ARG TARGETARCH
 
 # Yarn and pnpm through corepack, as in lint-node: the version of the
 # project's "packageManager" field, else the versions pinned in corepack.
-RUN corepack enable
+RUN corepack enable \
+    && npm install -g "c8@${C8_VERSION}" \
+    && npm cache clean --force
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     COREPACK_DEFAULT_TO_LATEST=0
 
@@ -37,6 +41,7 @@ RUN mkdir -p /opt/code-analysis \
         printf 'npm\tnpm %s\n' "$(npm --version)"; \
         printf 'corepack\tcorepack %s\n' "$(corepack --version)"; \
         printf 'bun\tBun %s\n' "$(bun --version)"; \
+        printf 'c8\tc8 %s\n' "$(c8 --version)"; \
     } > /opt/code-analysis/versions.tsv
 
 # Caches created while building belong to root, but the containers run as the

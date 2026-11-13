@@ -76,6 +76,21 @@ def outcomes(run) -> dict[str, str]:
     return {test.id: test.outcome for test in run.tests}
 
 
+def covered(result) -> dict[str, tuple]:
+    """file -> (lines covered, lines, branches covered, branches, uncovered lines) of the only coverage run."""
+    (coverage,) = result.coverage
+    assert coverage.status is Status.OK, coverage.notes
+    return {file.file: (file.lines_covered, file.lines_total, file.branches_covered, file.branches_total,
+                        file.uncovered_lines) for file in coverage.files}
+
+
+def mutated(result) -> tuple[dict[str, int], list[str]]:
+    """(mutants per state, excluded tests) of the only mutation run."""
+    (mutation,) = result.mutation
+    assert mutation.status is Status.OK, mutation.notes
+    return {state: count for state, count in mutation.counts.items() if count}, mutation.excluded_tests
+
+
 def keep(workspace: Path, run, pattern: str, name: str) -> None:
     if KEEP_REPORTS:
         report = next((workspace / "run" / "step5-tests" / run.output_dir).glob(pattern))
@@ -89,7 +104,8 @@ PYTHON = {
     "pyproject.toml": ('[project]\nname = "calc"\nversion = "0.1.0"\nrequires-python = ">=3.10"\n\n'
                        '[build-system]\nrequires = ["setuptools>=61"]\nbuild-backend = "setuptools.build_meta"\n\n'
                        '[tool.setuptools]\npackages = ["calc"]\n'),
-    "calc/__init__.py": "def add(a, b):\n    return a + b\n",
+    "calc/__init__.py": ("def add(a, b):\n    return a + b\n\n\n"
+                         "def sign(x):  # not tested\n    if x < 0:\n        return -1\n    return 1\n"),
     "tests/test_calc.py": ("import pytest\n\nfrom calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\n"
                            "def test_broken():\n    assert add(1, 1) == 3\n\n\n"
                            "@pytest.mark.skip(reason='slow')\ndef test_slow():\n    pass\n"),
@@ -117,6 +133,17 @@ def test_python_pytest_without_network(runner, workspace):
     assert summary["tests"]["network"] is False
     assert "differences_to_head" not in summary["tests"]
     keep(workspace, run, "junit.xml", "pytest-junit.xml")
+    # Branch coverage: "if x < 0" never ran (0 of 2 branches); the test files are not counted.
+    assert covered(result) == {"calc/__init__.py": (3, 6, 0, 2, "6-8")}
+    assert summary["coverage"][0]["line_rate"] == 0.5
+    keep(workspace, result.coverage[0], "coverage.xml", "coverage-py.xml")
+    # mutmut: the one mutant of add() is killed; no test runs sign(). The failing tests are deselected.
+    assert mutated(result) == ({"Killed": 1, "NoCoverage": 5},
+                               ["tests/test_calc.py::test_broken", "tests/test_network.py::test_network"])
+    undetected = {(mutant.line, mutant.original, mutant.replacement) for mutant in result.mutation[0].mutants
+                  if mutant.status == "NoCoverage"}
+    assert (6, "if x < 0:", "if x <= 0:") in undetected and result.mutation[0].score == 0.1667
+    assert json.loads((workspace / "run" / "step5-tests" / "summary.json").read_text())["mutation"]["mode"] == "sample"
 
 
 def test_python_differences_to_head(runner, workspace):
@@ -136,7 +163,9 @@ def test_python_differences_to_head(runner, workspace):
 RUST = {
     "Cargo.toml": '[package]\nname = "calc"\nversion = "0.1.0"\nedition = "2021"\n',
     "src/lib.rs": ("/// Adds two numbers.\n///\n/// ```\n/// assert_eq!(calc::add(1, 2), 3);\n/// ```\n"
-                   "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n"
+                   "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\n"
+                   "/// Not tested.\npub fn sign(x: i32) -> i32 {\n    if x < 0 {\n        -1\n    } else {\n        1\n    }\n}\n\n"
+                   "#[cfg(test)]\nmod tests {\n"
                    "    use super::add;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n\n"
                    "    #[test]\n    fn broken() {\n        assert_eq!(add(1, 1), 3);\n    }\n\n"
                    "    #[test]\n    #[ignore]\n    fn slow() {}\n}\n"),
@@ -158,6 +187,12 @@ def test_rust_cargo_test(runner, workspace):
     broken = next(test for test in run.tests if test.id.endswith("broken"))
     assert "assertion `left == right` failed" in broken.message
     keep(workspace, run, "cargo-test.stdout.txt", "cargo-test.txt")
+    # The #[cfg(test)] module is part of src/lib.rs: the rest of the failing test and the ignored test.
+    assert covered(result) == {"src/lib.rs": (8, 15, None, None, "11-13, 15, 17, 31, 35")}
+    keep(workspace, result.coverage[0], "cobertura.xml", "llvm-cov.xml")
+    # cargo-mutants has no "no coverage": the mutants of the untested sign() survive.
+    assert mutated(result) == ({"Killed": 5, "Survived": 7}, ["tests::broken"])
+    keep(workspace, result.mutation[0], "mutants.out/outcomes.json", "cargo-mutants.json")
 
 
 # --- C# ---
@@ -167,7 +202,9 @@ CSHARP = {
     "Calc/Calc.csproj": ('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework>'
                         "</PropertyGroup></Project>\n"),
     "Calc/Calculator.cs": "namespace Calc;\n\npublic static class Calculator\n{\n"
-                          "    public static int Add(int a, int b) => a + b;\n}\n",
+                          "    public static int Add(int a, int b) => a + b;\n\n"
+                          "    public static int Sign(int x)\n    {\n        if (x < 0)\n        {\n"
+                          "            return -1;\n        }\n        return 1;\n    }\n}\n",
     "Calc.Tests/Calc.Tests.csproj": (
         '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework>'
         "<IsPackable>false</IsPackable></PropertyGroup><ItemGroup>"
@@ -197,13 +234,19 @@ def test_csharp_dotnet_test_on_net8(runner, workspace):
         "Calc.Tests.CalculatorTests.AddsMany(a: 2, b: 2, sum: 4)": "passed",
     }
     keep(workspace, run, "trx/*.trx", "dotnet.trx")
+    assert covered(result) == {"Calc/Calculator.cs": (1, 7, 0, 2, "8-11, 13-14")}  # Sign() is not tested
+    keep(workspace, result.coverage[0], "results/*/coverage.cobertura.xml", "coverlet.xml")
+    assert mutated(result) == ({"Killed": 1, "NoCoverage": 4, "Ignored": 2}, ["Calc.Tests.CalculatorTests.Broken"])
+    keep(workspace, result.mutation[0], "reports/mutation-report.json", "stryker-net.json")
 
 
 # --- Java ---
 
 JAVA_SOURCES = {
     "src/main/java/calc/Calc.java": "package calc;\n\npublic class Calc {\n"
-                                    "    public static int add(int a, int b) {\n        return a + b;\n    }\n}\n",
+                                    "    public static int add(int a, int b) {\n        return a + b;\n    }\n\n"
+                                    "    public static int sign(int x) {\n        if (x < 0) {\n            return -1;\n"
+                                    "        }\n        return 1;\n    }\n}\n",
     "src/test/java/calc/CalcTest.java": (
         "package calc;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\n"
         "import org.junit.jupiter.api.Disabled;\nimport org.junit.jupiter.api.Test;\n\nclass CalcTest {\n"
@@ -230,6 +273,12 @@ def test_java_maven(runner, workspace):
     assert run.status is Status.OK, run.notes
     assert outcomes(run) == JAVA_OUTCOMES
     keep(workspace, run, "reports/*.xml", "surefire.xml")
+    # Line 3: the implicit constructor, never called.
+    assert covered(result) == {"src/main/java/calc/Calc.java": (1, 5, 0, 2, "3, 9-10, 12")}
+    keep(workspace, result.coverage[0], "reports/*.xml", "jacoco.xml")
+    # PIT's skipFailingTests leaves out the failing test.
+    assert mutated(result) == ({"Killed": 2, "NoCoverage": 4}, ["calc.CalcTest.broken"])
+    keep(workspace, result.mutation[0], "reports/*.xml", "pit.xml")
 
 
 def test_java_gradle(runner, workspace):
@@ -245,6 +294,8 @@ def test_java_gradle(runner, workspace):
     # Gradle names JUnit Platform tests by their display name, "adds()".
     assert outcomes(run) == {f"{test_id}()": outcome for test_id, outcome in JAVA_OUTCOMES.items()}
     keep(workspace, run, "reports/*.xml", "gradle.xml")
+    assert covered(result) == {"src/main/java/calc/Calc.java": (1, 5, 0, 2, "3, 9-10, 12")}
+    assert mutated(result) == ({"Killed": 2, "NoCoverage": 4}, ["calc.CalcTest.broken()"])
 
 
 # --- JavaScript and TypeScript ---
@@ -265,6 +316,25 @@ def test_javascript_vitest(runner, workspace):
     assert run.status is Status.OK, run.notes
     assert set(outcomes(run).values()) == {"passed", "failed", "skipped"} and len(run.tests) == 3
     keep(workspace, run, "junit.xml", "vitest-junit.xml")
+    assert covered(result) == {"src/calc.js": (2, 2, None, None, "")}  # also written although a test failed
+    keep(workspace, result.coverage[0], "cobertura-coverage.xml", "vitest-cobertura.xml")
+    assert result.mutation[0].status is Status.SKIPPED
+    assert result.mutation[0].notes == [("StrykerJS needs all tests to pass and cannot leave single tests out "
+                                         "(1 failed in the test run)")]
+
+
+def test_javascript_stryker_with_passing_tests(runner, workspace):
+    package = {"name": "calc", "type": "module", "scripts": {"test": "vitest"},
+               "devDependencies": {"vitest": "5.1.0"}}
+    source = ("export function add(a, b) {\n  return a + b;\n}\n\n"
+              "export function sign(x) {\n  if (x < 0) {\n    return -1;\n  }\n  return 1;\n}\n")
+    tests = ("import { describe, expect, it } from 'vitest';\nimport { add } from '../src/calc.js';\n\n"
+             "describe('calc', () => {\n  it('adds', () => expect(add(1, 2)).toBe(3));\n});\n")
+    result = check(runner, workspace, {"package.json": json.dumps(package), "src/calc.js": source,
+                                       "test/calc.test.js": tests})
+    assert mutated(result) == ({"Killed": 2, "NoCoverage": 7}, [])
+    assert result.mutation[0].tool == "StrykerJS"
+    keep(workspace, result.mutation[0], "mutation.json", "stryker-js.json")
 
 
 def test_javascript_jest(runner, workspace):
@@ -281,6 +351,8 @@ def test_javascript_jest(runner, workspace):
                              "__tests__/calc.test.js > calc is broken": "failed",
                              "__tests__/calc.test.js > calc is slow": "skipped"}
     keep(workspace, run, "jest.json", "jest.json")
+    assert covered(result) == {"src/calc.cjs": (1, 1, None, None, "")}
+    keep(workspace, result.coverage[0], "cobertura-coverage.xml", "jest-cobertura.xml")
 
 
 def test_javascript_node_test_runner(runner, workspace):
@@ -294,6 +366,9 @@ def test_javascript_node_test_runner(runner, workspace):
     assert run.status is Status.OK, run.notes
     assert sorted(outcomes(run).values()) == ["failed", "passed", "skipped"]
     keep(workspace, run, "junit.xml", "node-test-junit.xml")
+    assert result.coverage[0].tool == "c8"
+    assert covered(result) == {"src/calc.js": (3, 3, 2, 2, "")}
+    keep(workspace, result.coverage[0], "cobertura-coverage.xml", "c8-cobertura.xml")
 
 
 # --- C and C++ ---
@@ -303,9 +378,12 @@ def test_cpp_ctest(runner, workspace):
     files = {
         "vcpkg.json": '{"name": "calc", "version": "0.1.0", "dependencies": []}\n',
         "CMakeLists.txt": ("cmake_minimum_required(VERSION 3.21)\nproject(calc C)\nenable_testing()\n"
-                           "add_executable(passes tests/passes.c)\nadd_executable(fails tests/fails.c)\n"
+                           "add_library(calc src/calc.c)\nadd_executable(passes tests/passes.c)\n"
+                           "target_link_libraries(passes calc)\nadd_executable(fails tests/fails.c)\n"
                            "add_test(NAME passes COMMAND passes)\nadd_test(NAME fails COMMAND fails)\n"),
-        "tests/passes.c": "int main(void) { return 0; }\n",
+        "src/calc.c": ("int add(int a, int b) {\n    return a + b;\n}\n\n"
+                       "int sign(int x) {\n    if (x < 0) {\n        return -1;\n    }\n    return 1;\n}\n"),
+        "tests/passes.c": "int add(int a, int b);\nint main(void) { return add(1, 2) == 3 ? 0 : 1; }\n",
         "tests/fails.c": '#include <assert.h>\nint main(void) { assert(1 + 1 == 3); return 0; }\n',
     }
     result = check(runner, workspace, files)
@@ -313,3 +391,7 @@ def test_cpp_ctest(runner, workspace):
     assert run.status is Status.OK, run.notes
     assert outcomes(run) == {"passes": "passed", "fails": "failed"}  # Debug build: assert() is active
     keep(workspace, run, "ctest-junit.xml", "ctest-junit.xml")
+    assert covered(result) == {"src/calc.c": (2, 7, 0, 2, "5-7, 9-10")}  # tests/ is test code, not counted
+    keep(workspace, result.coverage[0], "cobertura.xml", "gcovr.xml")
+    assert result.mutation[0].status is Status.SKIPPED
+    assert result.mutation[0].notes == ["mutation testing is not supported for C/C++"]
