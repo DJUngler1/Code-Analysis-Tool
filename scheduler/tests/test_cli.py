@@ -6,6 +6,7 @@ from scheduler.cli import main
 from scheduler.linting import LintingResult, Status, ToolRun
 from scheduler.dependencies import Coverage, DependencyFinding, DependencyResult, DependencyRun
 from scheduler.static_analysis import AnalysisResult, AnalysisRun
+from scheduler.testing import Suite, TestingResult
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +55,25 @@ class FakeDependencies(list):
 def dependency_calls(monkeypatch) -> FakeDependencies:
     fake = FakeDependencies()
     monkeypatch.setattr("scheduler.cli.run_dependencies", fake)
+    return fake
+
+
+class FakeTests(list):
+    """Stands in for step 5: records the run folders, returns `result`."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.result = TestingResult(None)
+
+    def __call__(self, acceptance, settings, run_dir):
+        self.append(run_dir)
+        return self.result
+
+
+@pytest.fixture(autouse=True)
+def step5_calls(monkeypatch) -> FakeTests:
+    fake = FakeTests()
+    monkeypatch.setattr("scheduler.cli.run_tests", fake)
     return fake
 
 
@@ -241,3 +261,36 @@ def test_step_3_failure_takes_precedence_over_step_4(monkeypatch, make_project, 
     analysis_calls.result = AnalysisResult(tmp_path / "run", errors=["image missing"])
     dependency_calls.result = DependencyResult(tmp_path / "run", errors=["Docker is not reachable"])
     assert main(["--path", str(root)]) == 6
+
+
+@requires_git
+def test_incomplete_step_5_exits_with_8(monkeypatch, make_project, capsys, tmp_path, step5_calls):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    fake_linting(monkeypatch, LintingResult(tmp_path / "run", [ToolRun("Python", "ruff check", Status.OK)]))
+    step5_calls.result = TestingResult(
+        tmp_path / "run",
+        [Suite("Python", ".", "pip", "requirements.txt", tests_found=True, frameworks=["pytest"]),
+         Suite("Rust", ".", "Cargo", "Cargo.toml")],
+        not_checked={"C/C++": "no CMakeLists.txt in the project folder"},
+        errors=["test detection failed: boom"],
+    )
+    assert main(["--path", str(root)]) == 8
+    out = capsys.readouterr().out
+    assert step5_calls == [tmp_path / "run"]
+    assert "Tests found in 1 of 2 checked build units." in out
+    assert "No tests found for Rust – noted in the report." in out
+    assert "Not checked: C/C++ (no CMakeLists.txt in the project folder)." in out
+    assert f"Results: {tmp_path / 'run' / 'step5-tests'}" in out
+    assert "Step 5 incomplete." in out
+
+
+@requires_git
+def test_step_4_failure_takes_precedence_over_step_5(monkeypatch, make_project, tmp_path, dependency_calls,
+                                                    step5_calls):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    fake_linting(monkeypatch, LintingResult(tmp_path / "run", [ToolRun("Python", "ruff check", Status.OK)]))
+    dependency_calls.result = DependencyResult(tmp_path / "run", errors=["Docker is not reachable"])
+    step5_calls.result = TestingResult(tmp_path / "run", errors=["boom"])
+    assert main(["--path", str(root)]) == 7

@@ -1,5 +1,5 @@
 """Entry point: ask for the project, check it (step 1), run linters and formatters (step 2),
-run the static code analysis (step 3)."""
+run the static code analysis (step 3), check the dependencies (step 4) and the tests (step 5)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,9 @@ from scheduler.ollama import OllamaStatus, check_ollama
 from scheduler.paths import PathError, resolve_project_path
 from scheduler.static_analysis import AnalysisResult, run_static_analysis
 from scheduler.static_analysis.run import STEP_DIR as ANALYSIS_STEP_DIR
+from scheduler.testing import TestingResult, run_tests
+from scheduler.testing.run import STEP_DIR as TESTS_STEP_DIR
+from scheduler.testing.run import languages_without_tests
 
 EXIT_INVALID_INPUT = 1
 # Step 2 could not run completely: OUTPUT_DIR, Docker or a tool image missing,
@@ -29,8 +32,12 @@ EXIT_ANALYSIS_INCOMPLETE = 6
 # Step 4 could not run completely: Docker or a tool image missing, a lock file
 # command or a dependency check failed.
 EXIT_DEPENDENCIES_INCOMPLETE = 7
+# Step 5 could not run completely: config/tests.toml invalid, Docker or a test image missing,
+# or the tests of a suite could not be run.
+EXIT_TESTS_INCOMPLETE = 8
 MAX_LISTED_MANIFESTS = 5
 MAX_LISTED_MODELS = 5
+MAX_LISTED_DIFFERENCES = 10
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -90,11 +97,17 @@ def _run(path_arg: str | None, settings: Settings, *, check_only: bool = False) 
           "package names and versions are sent to OSV.dev and the registries) ...\n")
     dependencies = run_dependencies(result, settings, linting.run_dir)
     print(format_dependencies(dependencies))
+
+    print("\nStep 5 – tests (finding and running them; the project's tests run in containers) ...\n")
+    tests = run_tests(result, settings, linting.run_dir)
+    print(format_tests(tests))
     if not linting.complete:
         return EXIT_LINTING_INCOMPLETE
     if not analysis.complete:
         return EXIT_ANALYSIS_INCOMPLETE
-    return int(result.outcome) if dependencies.complete else EXIT_DEPENDENCIES_INCOMPLETE
+    if not dependencies.complete:
+        return EXIT_DEPENDENCIES_INCOMPLETE
+    return int(result.outcome) if tests.complete else EXIT_TESTS_INCOMPLETE
 
 
 def prompt_for_project(settings: Settings) -> Path | None:
@@ -253,3 +266,48 @@ def format_dependencies(result: DependencyResult) -> str:
         lines.append(f"Results: {result.run_dir / DEPENDENCIES_STEP_DIR}")
     lines.append("Step 4 complete." if result.complete else "Step 4 incomplete.")
     return "\n".join(lines)
+
+
+def format_tests(result: TestingResult) -> str:
+    lines: list[str] = []
+    if result.suites:
+        found = sum(suite.tests_found for suite in result.suites)
+        lines.append(f"\nTests found in {found} of {len(result.suites)} checked build units.")
+    lines += [f"No tests found for {language} – noted in the report." for language in languages_without_tests(result)]
+    lines += [f"Not checked: {language} ({reason})." for language, reason in result.not_checked.items()]
+    for run in result.runs:
+        counts = ", ".join(f"{count} {outcome}" for outcome, count in run.counts.items() if count)
+        lines.append(f"{run.suite}: {run.status.value}" + (f", {counts}" if counts else ""))
+    failing = sum(run.counts["failed"] + run.counts["error"] for run in result.runs)
+    if failing and not result.network:
+        lines.append(f"{failing} tests failed. The tests ran without network (config/tests.toml); "
+                     "tests that need it fail for that reason.")
+    if result.network and result.runs:
+        lines.append("Warning: the tests ran with network (config/tests.toml: network = true).")
+    for comparison in result.differences:
+        lines.append(f"Differs from HEAD (last commit, without the changes of step 2): {comparison.suite}")
+        if comparison.status_after_step_2 != comparison.status_head or not comparison.tests:
+            lines.append(f"  after step 2: {_run_state(comparison.status_after_step_2, comparison.counts_after_step_2)}"
+                         f"; at HEAD: {_run_state(comparison.status_head, comparison.counts_head)}")
+        for test in comparison.tests[:MAX_LISTED_DIFFERENCES]:
+            lines.append(f"  {test.id}: {test.after_step_2} after step 2, {test.head} at HEAD")
+        if len(comparison.tests) > MAX_LISTED_DIFFERENCES:
+            lines.append(f"  ... and {len(comparison.tests) - MAX_LISTED_DIFFERENCES} more (summary.json)")
+    if result.differences:
+        lines.append("Differences can come from the changes of step 2 or from flaky tests.")
+    failed = [run.suite for run in result.runs if run.status is Status.FAILED]
+    if failed:
+        lines.append(f"Failed: {', '.join(failed)} (see the notes above and summary.json).")
+    lines += [f"Error: {error}" for error in result.errors]
+    if result.run_dir is not None:
+        lines.append(f"Results: {result.run_dir / TESTS_STEP_DIR}")
+    lines.append("Step 5 complete." if result.complete else "Step 5 incomplete.")
+    return "\n".join(lines)
+
+
+def _run_state(status: str, counts: dict[str, int]) -> str:
+    total = sum(counts.values())
+    if not total:
+        return f"{status}, no test ran"
+    return f"{status}, {total} tests (" + ", ".join(f"{count} {outcome}" for outcome, count in counts.items()
+                                                    if count) + ")"

@@ -18,7 +18,7 @@ Requirements: Docker (Docker Desktop on macOS/Windows) and, for the LLM evaluati
    - `OUTPUT_DIR` to the folder for the results, outside your projects. It is created if missing.
    - `SONARQUBE_ADMIN_PASSWORD` and `SONARQUBE_DB_PASSWORD` for SonarQube (step 3). The admin password needs at least 12 characters with an uppercase and a lowercase letter, a digit and a special character. The tool sets it on SonarQube's first start; you log in with it at http://localhost:9000.
    - Optional: `CONAN_AUDIT_TOKEN` for `conan audit` in step 4 (free registration at https://audit.conan.io/register).
-2. Build the tool images: linters/formatters, OpenGrep, the SonarQube scanners and the dependency checks. Do this once, and again after changes in `docker/linters/`, `docker/static-analysis/`, `docker/dependencies/` or the rule sets in `config/opengrep.toml`. It downloads the toolchains (about 5 GB):
+2. Build the tool images: linters/formatters, OpenGrep, the SonarQube scanners, the dependency checks and the test images. Do this once, and again after changes in `docker/linters/`, `docker/static-analysis/`, `docker/dependencies/`, `docker/tests/` or the rule sets in `config/opengrep.toml`. It downloads the toolchains (about 5 GB; the six test images of step 5 take about 10 GB more disk space):
    ```sh
    docker compose -f docker/docker-compose.yml --profile tools build
    ```
@@ -52,7 +52,7 @@ Language shares are bytes of source code per language, as on GitHub. A `.h` file
 
 | Exit code | Meaning |
 |---|---|
-| 0 | Project accepted (and, without `--check-only`, steps 2 to 4 completed) |
+| 0 | Project accepted (and, without `--check-only`, steps 2 to 5 completed) |
 | 1 | Invalid input or no project selected |
 | 2 | Language not supported, or no source code found |
 | 3 | No package manager found for the primary language |
@@ -60,6 +60,7 @@ Language shares are bytes of source code per language, as on GitHub. A `.h` file
 | 5 | Step 2 incomplete: `OUTPUT_DIR`, Docker or a tool image missing, a tool failed, or a project file could not be moved back |
 | 6 | Step 3 incomplete: OpenGrep or SonarQube failed, e.g. `config/opengrep.toml` invalid, a tool image missing or outdated, the SonarQube server not running or `SONARQUBE_ADMIN_PASSWORD` missing |
 | 7 | Step 4 incomplete: Docker or a tool image missing, a dependency check failed, or a lock file could not be generated (completely) |
+| 8 | Step 5 incomplete: `config/tests.toml` invalid, Docker or a test image missing, or the tests of a suite could not be run (e.g. the build failed) |
 | 125 | (`bin/code-analysis` only) Docker or the container is not running |
 
 ### Linters and formatters (step 2)
@@ -140,13 +141,38 @@ After step 3, the project's dependencies are checked for known vulnerabilities, 
 | `step4-dependencies/osv-scanner/`, `audits/` | Raw reports of OSV-Scanner and of each audit |
 | `step4-dependencies/lockfiles/` | The lock files generated for the checks |
 
+### Tests (step 5)
+
+After step 4, the tool finds and runs the project's tests, as defined in [docs/testAnalysis/README.md](docs/testAnalysis/README.md). Measuring the coverage and mutation testing will follow.
+
+- **Finding the tests:**
+  - A test suite holds the tests of one build unit, e.g. a Python project, a `package.json`, a Maven or Gradle build, a .NET test project, a Cargo workspace or a CMake project.
+  - Tests are found from the files git knows, with the default conventions of the test frameworks (e.g. pytest's `test_*.py`, Jest's `__tests__/` and `*.test.js`, JUnit's `@Test`, Rust's `#[test]`, CTest's `add_test`).
+  - A language without tests is named in the output and noted in the results.
+  - C/C++: only CMake projects with a `CMakeLists.txt` in the project folder are checked.
+- **Running the tests:**
+  - Each suite runs in a fresh container of its language's test image (`code-analysis/test-<language>`), on a copy of the project, with the project's framework or build tool: pytest, Jest/Vitest/Mocha/`node:test`/Bun, Maven/Gradle, `dotnet test`, `cargo test`, CTest.
+  - Failing tests are results, not errors.
+  - JavaScript tests that need a browser (Playwright, Cypress, Karma) and Conda environments are not run.
+- **Network:** the tests execute the project's code, so they run **without network** by default.
+  - Only the download of the dependencies before them has network.
+  - To let the tests use the network, set `network = true` in [`config/tests.toml`](config/tests.toml). Only do this if you trust the project's code.
+  - The same file sets the time limit per test run (`time_limit_minutes`, default 60, `0` for no limit). The tool reads it at every run.
+- **Changes of step 2:** if step 2 changed the project, the tests also run on the last commit (HEAD), and tests that end differently are listed. Without differences, nothing is reported.
+
+| Path | Content |
+|---|---|
+| `step5-tests/summary.json` | The test suites (language, folder, package manager or build tool, frameworks, test files), the languages without tests and those not checked; per test run: tool, version, status, number of tests per outcome, failed tests, commands, notes; differences to HEAD if any |
+| `step5-tests/tests.json` | Every test: suite, id, outcome (`passed`, `failed`, `error`, `skipped`), duration, failure message |
+| `step5-tests/<nn>-<language>-<folder>/` | Logs and raw reports of each run (`run/`, and `run-head/` for the comparison) |
+
 ### Ollama
 
 The container reaches Ollama at `http://host.docker.internal:11434` (change it with `OLLAMA_BASE_URL` in `docker/.env`). With Docker Desktop the default Ollama setup works. On Linux, Ollama must listen on all interfaces (`OLLAMA_HOST=0.0.0.0 ollama serve`), and `HOST_UID` / `HOST_GID` should be set in `docker/.env` so files written by the tool keep your ownership.
 
 ### Network
 
-All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The OpenGrep container of step 3 has no network: its rules are part of the image. The SonarQube scanners use the network to reach the server (`http://sonarqube:9000`) and, for builds, the dependencies. The SonarQube server is published only on `127.0.0.1:9000`. The containers of step 4 use the network to resolve dependencies and to query OSV.dev, deps.dev and the registries.
+All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The OpenGrep container of step 3 has no network: its rules are part of the image. The SonarQube scanners use the network to reach the server (`http://sonarqube:9000`) and, for builds, the dependencies. The SonarQube server is published only on `127.0.0.1:9000`. The containers of step 4 use the network to resolve dependencies and to query OSV.dev, deps.dev and the registries. In step 5, only the download of the dependencies has network; the tests themselves run without it (`--network none`) unless `config/tests.toml` allows it.
 
 ### Development
 
@@ -157,7 +183,7 @@ python3 -m venv .venv
 .venv/bin/pytest
 ```
 
-The integration tests of steps 2 to 4 run the real tool images and are skipped by default; those of step 4 need internet access. The SonarQube tests also need the running server (`up -d`) and `SONARQUBE_ADMIN_PASSWORD` (environment or `docker/.env`). They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
+The integration tests of steps 2 to 5 run the real tool images and are skipped by default; those of steps 4 and 5 need internet access. The SonarQube tests also need the running server (`up -d`) and `SONARQUBE_ADMIN_PASSWORD` (environment or `docker/.env`). They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
 
 ```sh
 CODE_ANALYSIS_DOCKER_TEST_DIR=~/code-analysis-results/_itest .venv/bin/pytest -m docker

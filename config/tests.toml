@@ -1,0 +1,13 @@
+# Settings of step 5 (tests). Definition: docs/testAnalysis/README.md
+#
+# The tool reads this file at the start of every run: changes need no rebuild.
+
+[tests]
+# Network for the test runs. Tests execute the project's code. Without
+# network they can reach neither the internet nor services in your local
+# network. Only set this to true if you trust the project's code.
+# Downloading the dependencies before the tests always has network.
+network = false
+
+# Time limit of each test run, in minutes. 0 means no limit.
+time_limit_minutes = 60

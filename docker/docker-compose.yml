@@ -60,8 +60,9 @@ services:
         target: ${OUTPUT_DIR}
         bind:
           create_host_path: true
-      # Tool configuration (config/opengrep.toml: OpenGrep's rule sets), read
-      # at each run: changes need no rebuild of the scheduler.
+      # Tool configuration (config/opengrep.toml: OpenGrep's rule sets;
+      # config/tests.toml: network and time limit of the tests), read at each
+      # run: changes need no rebuild of the scheduler.
       - type: bind
         source: ../config
         target: /app/config
@@ -187,6 +188,33 @@ services:
     profiles: ["tools"]
     build: dependencies/python
     image: code-analysis/audit-python:latest
+
+  # Test images (step 5), one per language: install the project, run its tests.
+  # Definition: docs/testAnalysis/README.md
+  test-cpp:
+    profiles: ["tools"]
+    build: tests/cpp
+    image: code-analysis/test-cpp:latest
+  test-dotnet:
+    profiles: ["tools"]
+    build: tests/dotnet
+    image: code-analysis/test-dotnet:latest
+  test-java:
+    profiles: ["tools"]
+    build: tests/java
+    image: code-analysis/test-java:latest
+  test-node:
+    profiles: ["tools"]
+    build: tests/node
+    image: code-analysis/test-node:latest
+  test-python:
+    profiles: ["tools"]
+    build: tests/python
+    image: code-analysis/test-python:latest
+  test-rust:
+    profiles: ["tools"]
+    build: tests/rust
+    image: code-analysis/test-rust:latest
 
 volumes:
   sonarqube-data:

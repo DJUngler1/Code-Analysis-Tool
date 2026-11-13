@@ -46,7 +46,7 @@ class ToolRunner(Protocol):
         workdir: Path,
         mounts: Sequence[Path],
         env: Mapping[str, str] | None = None,
-        timeout: float,
+        timeout: float | None,
         read_only: Sequence[Path] = (),
         network: str | None = None,
     ) -> CommandResult: ...
@@ -147,11 +147,14 @@ class DockerRunner:
         workdir: Path,
         mounts: Sequence[Path],
         env: Mapping[str, str] | None = None,
-        timeout: float,
+        timeout: float | None,
         read_only: Sequence[Path] = (),
         network: str | None = None,
     ) -> CommandResult:
-        """Run one command; `network` overrides the runner's network (e.g. "none")."""
+        """Run one command; `network` overrides the runner's network (e.g. "none").
+
+        `timeout` in seconds; None means no limit.
+        """
         name = f"code-analysis-{image.rsplit('/', 1)[-1].split(':', 1)[0]}-{uuid.uuid4().hex[:8]}"
         args = build_run_args(
             image, command, name=name, workdir=workdir, mounts=mounts, env=env, user=self.user,

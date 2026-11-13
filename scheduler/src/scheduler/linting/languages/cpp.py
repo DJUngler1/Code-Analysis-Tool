@@ -274,21 +274,33 @@ def _database_files(database: Path) -> list[Path]:
 
 def _generate_script(session: ToolSession) -> tuple[str, str]:
     """Shell script ($1 = project, $2 = build folder) that writes compile_commands.json."""
-    manifests = sorted(session.ctx.manifests("C", "C++"), key=lambda path: (len(path.parts), path.as_posix()))
+    return cmake_configure_script(session.ctx.project, session.ctx.manifests("C", "C++"))
+
+
+def cmake_configure_script(project: Path, manifests: list[Path], *, build_type: str = "Release") -> tuple[str, str]:
+    """Shell script ($1 = project, $2 = build folder) that configures the CMake build.
+
+    Dependencies come from Conan (installed into $2/conan-home) or vcpkg (its
+    CMake toolchain), whichever manifest step 1 found first. Also used by the
+    tests (step 5) with build_type "Debug".
+    """
+    manifests = sorted(manifests, key=lambda path: (len(path.parts), path.as_posix()))
     conan = next((path for path in manifests if path.name in ("conanfile.txt", "conanfile.py")), None)
     vcpkg = next((path for path in manifests if path.name == "vcpkg.json"), None)
-    cmake = 'cmake -S "$1" -B "$2" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON'
+    cmake = (f'cmake -S "$1" -B "$2" -G Ninja -DCMAKE_BUILD_TYPE={build_type} '
+             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
 
     if conan is not None:
-        text = (session.ctx.project / conan).read_text(encoding="utf-8", errors="replace")
+        text = (project / conan).read_text(encoding="utf-8", errors="replace")
         generators = " ".join(f"-g {name}" for name in ("CMakeDeps", "CMakeToolchain") if name not in text)
+        settings = f" -s build_type={build_type}" if build_type != "Release" else ""
         # The packages must outlive this container: clang-tidy runs in a new
         # one and needs their headers at the paths in compile_commands.json.
         script = (
             "set -e\n"
             'export CONAN_HOME="$2/conan-home"\n'
             "conan profile detect --force\n"
-            f'conan install "$1/{conan.parent.as_posix()}" --output-folder="$2" --build=missing {generators}\n'
+            f'conan install "$1/{conan.parent.as_posix()}" --output-folder="$2" --build=missing{settings} {generators}\n'
             'toolchain=$(find "$2" -name conan_toolchain.cmake | head -n 1)\n'
             f'{cmake} -DCMAKE_TOOLCHAIN_FILE="$toolchain"\n'
         )

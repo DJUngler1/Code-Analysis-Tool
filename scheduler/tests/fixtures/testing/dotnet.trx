@@ -1,0 +1,92 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="a0911739-e832-45bb-b436-9eab5838d5af" name="@e8afefd25a87 2026-11-13 09:08:56" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-11-13T09:08:56.8148235+00:00" queuing="2026-11-13T09:08:56.8148235+00:00" start="2026-11-13T09:08:56.5094770+00:00" finish="2026-11-13T09:08:56.8167150+00:00" />
+  <TestSettings name="default" id="3eae7145-3aed-4356-977d-f0e5fdae1cbf">
+    <Deployment runDeploymentRoot="_e8afefd25a87_2026-11-13_09_08_56" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="75314a5a-d27a-4435-a0a8-baddfe7bf662" testId="0802c551-b5e5-36ad-88fa-2f818a0cc416" testName="Calc.Tests.CalculatorTests.AddsMany(a: 1, b: 1, sum: 2)" computerName="e8afefd25a87" duration="00:00:00.0000298" startTime="2026-11-13T09:08:56.7812684+00:00" endTime="2026-11-13T09:08:56.7813049+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="75314a5a-d27a-4435-a0a8-baddfe7bf662" />
+    <UnitTestResult executionId="0737d1ac-800a-46be-8704-188b37553c31" testId="2a8a3f21-dd31-2aef-4e8e-0903e8bac88a" testName="Calc.Tests.CalculatorTests.Broken" computerName="e8afefd25a87" duration="00:00:00.0009378" startTime="2026-11-13T09:08:56.7815508+00:00" endTime="2026-11-13T09:08:56.7840724+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="0737d1ac-800a-46be-8704-188b37553c31">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.Equal() Failure: Values differ
+Expected: 3
+Actual:   2</Message>
+          <StackTrace>   at Calc.Tests.CalculatorTests.Broken() in /work/itest/run/step5-tests/workspace/Calc.Tests/CalculatorTests.cs:line 12
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="4e4e4269-cb61-4f15-b4c5-40148291e7df" testId="17a25743-5a10-e61c-712e-229bcdd291de" testName="Calc.Tests.CalculatorTests.Slow" computerName="e8afefd25a87" duration="00:00:00.0010000" startTime="2026-11-13T09:08:56.7856889+00:00" endTime="2026-11-13T09:08:56.7857831+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="4e4e4269-cb61-4f15-b4c5-40148291e7df">
+      <Output>
+        <ErrorInfo>
+          <Message>slow</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="ef7cb959-1b42-4c0c-bf0c-c264cdde6e01" testId="88301986-0d02-f129-fc79-3512bb22bcce" testName="Calc.Tests.CalculatorTests.AddsMany(a: 2, b: 2, sum: 4)" computerName="e8afefd25a87" duration="00:00:00.0000803" startTime="2026-11-13T09:08:56.7814638+00:00" endTime="2026-11-13T09:08:56.7814885+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ef7cb959-1b42-4c0c-bf0c-c264cdde6e01" />
+    <UnitTestResult executionId="a6045809-91bb-4c30-8369-e6eb6ae6db61" testId="6f0bae2e-f297-7d88-ed69-a54b574ed567" testName="Calc.Tests.CalculatorTests.Adds" computerName="e8afefd25a87" duration="00:00:00.0024146" startTime="2026-11-13T09:08:56.7736161+00:00" endTime="2026-11-13T09:08:56.7780488+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a6045809-91bb-4c30-8369-e6eb6ae6db61" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="Calc.Tests.CalculatorTests.AddsMany(a: 1, b: 1, sum: 2)" storage="/work/itest/run/step5-tests/workspace/calc.tests/bin/debug/net8.0/calc.tests.dll" id="0802c551-b5e5-36ad-88fa-2f818a0cc416">
+      <Execution id="75314a5a-d27a-4435-a0a8-baddfe7bf662" />
+      <TestMethod codeBase="/work/itest/run/step5-tests/workspace/Calc.Tests/bin/Debug/net8.0/Calc.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Calc.Tests.CalculatorTests" name="AddsMany" />
+    </UnitTest>
+    <UnitTest name="Calc.Tests.CalculatorTests.Broken" storage="/work/itest/run/step5-tests/workspace/calc.tests/bin/debug/net8.0/calc.tests.dll" id="2a8a3f21-dd31-2aef-4e8e-0903e8bac88a">
+      <Execution id="0737d1ac-800a-46be-8704-188b37553c31" />
+      <TestMethod codeBase="/work/itest/run/step5-tests/workspace/Calc.Tests/bin/Debug/net8.0/Calc.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Calc.Tests.CalculatorTests" name="Broken" />
+    </UnitTest>
+    <UnitTest name="Calc.Tests.CalculatorTests.AddsMany(a: 2, b: 2, sum: 4)" storage="/work/itest/run/step5-tests/workspace/calc.tests/bin/debug/net8.0/calc.tests.dll" id="88301986-0d02-f129-fc79-3512bb22bcce">
+      <Execution id="ef7cb959-1b42-4c0c-bf0c-c264cdde6e01" />
+      <TestMethod codeBase="/work/itest/run/step5-tests/workspace/Calc.Tests/bin/Debug/net8.0/Calc.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Calc.Tests.CalculatorTests" name="AddsMany" />
+    </UnitTest>
+    <UnitTest name="Calc.Tests.CalculatorTests.Slow" storage="/work/itest/run/step5-tests/workspace/calc.tests/bin/debug/net8.0/calc.tests.dll" id="17a25743-5a10-e61c-712e-229bcdd291de">
+      <Execution id="4e4e4269-cb61-4f15-b4c5-40148291e7df" />
+      <TestMethod codeBase="/work/itest/run/step5-tests/workspace/Calc.Tests/bin/Debug/net8.0/Calc.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Calc.Tests.CalculatorTests" name="Slow" />
+    </UnitTest>
+    <UnitTest name="Calc.Tests.CalculatorTests.Adds" storage="/work/itest/run/step5-tests/workspace/calc.tests/bin/debug/net8.0/calc.tests.dll" id="6f0bae2e-f297-7d88-ed69-a54b574ed567">
+      <Execution id="a6045809-91bb-4c30-8369-e6eb6ae6db61" />
+      <TestMethod codeBase="/work/itest/run/step5-tests/workspace/Calc.Tests/bin/Debug/net8.0/Calc.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Calc.Tests.CalculatorTests" name="Adds" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="0802c551-b5e5-36ad-88fa-2f818a0cc416" executionId="75314a5a-d27a-4435-a0a8-baddfe7bf662" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="2a8a3f21-dd31-2aef-4e8e-0903e8bac88a" executionId="0737d1ac-800a-46be-8704-188b37553c31" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="17a25743-5a10-e61c-712e-229bcdd291de" executionId="4e4e4269-cb61-4f15-b4c5-40148291e7df" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="88301986-0d02-f129-fc79-3512bb22bcce" executionId="ef7cb959-1b42-4c0c-bf0c-c264cdde6e01" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="6f0bae2e-f297-7d88-ed69-a54b574ed567" executionId="a6045809-91bb-4c30-8369-e6eb6ae6db61" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="5" executed="4" passed="3" failed="1" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v4.0.1+0f7d528729 (64-bit .NET 8.0.34)
+[xUnit.net 00:00:00.03]   Discovering: Calc.Tests
+[xUnit.net 00:00:00.05]   Discovered:  Calc.Tests
+[xUnit.net 00:00:00.06]   Starting:    Calc.Tests
+[xUnit.net 00:00:00.08]       Assert.Equal() Failure: Values differ
+[xUnit.net 00:00:00.08]       Expected: 3
+[xUnit.net 00:00:00.08]       Actual:   2
+[xUnit.net 00:00:00.08]       Stack Trace:
+[xUnit.net 00:00:00.08]         /work/itest/run/step5-tests/workspace/Calc.Tests/CalculatorTests.cs(12,0): at Calc.Tests.CalculatorTests.Broken()
+[xUnit.net 00:00:00.08]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.08]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.08]       slow
+[xUnit.net 00:00:00.08]   Finished:    Calc.Tests
+Test 'Calc.Tests.CalculatorTests.Slow' was skipped in the test run.
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="e8afefd25a87" outcome="Error" timestamp="2026-11-13T09:08:56.7851334+00:00">
+        <Text>[xUnit.net 00:00:00.08]     Calc.Tests.CalculatorTests.Broken [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="e8afefd25a87" outcome="Warning" timestamp="2026-11-13T09:08:56.7871179+00:00">
+        <Text>[xUnit.net 00:00:00.08]     Calc.Tests.CalculatorTests.Slow [SKIP]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

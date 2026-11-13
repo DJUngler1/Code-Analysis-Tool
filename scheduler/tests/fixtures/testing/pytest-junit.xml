@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="1" tests="5" time="0.028" timestamp="2026-11-13T09:08:47.436577+00:00" hostname="6b4e8ee5f3e7"><testcase classname="tests.test_calc" name="test_add" time="0.000" /><testcase classname="tests.test_calc" name="test_broken" time="0.000"><failure message="assert 2 == 3&#10; +  where 2 = add(1, 1)">def test_broken():
+&gt;       assert add(1, 1) == 3
+E       assert 2 == 3
+E        +  where 2 = add(1, 1)
+
+tests/test_calc.py:11: AssertionError</failure></testcase><testcase classname="tests.test_calc" name="test_slow" time="0.000"><skipped type="pytest.skip" message="slow">/work/itest/run/step5-tests/workspace/tests/test_calc.py:14: slow</skipped></testcase><testcase classname="tests.test_legacy.LegacyTests" name="test_add" time="0.000" /><testcase classname="tests.test_network" name="test_network" time="0.001"><failure message="socket.gaierror: [Errno -3] Temporary failure in name resolution">def test_network():
+&gt;       socket.create_connection(('pypi.org', 443), timeout=5)
+
+tests/test_network.py:5: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.13/socket.py:844: in create_connection
+    for res in getaddrinfo(host, port, 0, SOCK_STREAM):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+host = 'pypi.org', port = 443, family = 0, type = &lt;SocketKind.SOCK_STREAM: 1&gt;
+proto = 0, flags = 0
+
+    def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        """Resolve host and port into list of address info entries.
+    
+        Translate the host/port argument into a sequence of 5-tuples that contain
+        all the necessary arguments for creating a socket connected to that service.
+        host is a domain name, a string representation of an IPv4/v6 address or
+        None. port is a string service name such as 'http', a numeric port number or
+        None. By passing None as the value of host and port, you can pass NULL to
+        the underlying C API.
+    
+        The family, type and proto arguments can be optionally specified in order to
+        narrow the list of addresses returned. Passing zero as a value for each of
+        these arguments selects the full range of results.
+        """
+        # We override this function since we want to translate the numeric family
+        # and socket type values to enum constants.
+        addrlist = []
+&gt;       for res in _socket.getaddrinfo(host, port, family, type, proto, flags):
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       socket.gaierror: [Errno -3] Temporary failure in name resolution
+
+/usr/local/lib/python3.13/socket.py:983: gaierror</failure></testcase></testsuite></testsuites>
