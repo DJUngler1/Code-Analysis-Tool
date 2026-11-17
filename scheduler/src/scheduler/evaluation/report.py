@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from scheduler.evaluation.config import ReportConfig
+from scheduler.evaluation.config import InputConfig, ReportConfig
 from scheduler.evaluation.items import LINT_DIR, SEVERITY_RANK, AreaItems, read_json
 from scheduler.evaluation.ollama import Exchange, OllamaClient
 from scheduler.evaluation.prompts import render, report_prompt
@@ -40,11 +40,8 @@ LABEL_ORDER = ("REAL", "PROJECT", "CRITICAL", "TEST_GAP", "ENVIRONMENT", "NON_CR
                "LOW_VALUE", "FALSE_POSITIVE", "NOISE")
 PROMPTS = {"security": "security_report", "code_quality": "lint_report", "test_quality": "test_report"}
 TEXT_FIELDS = ("title", "description", "recommendation", "reason", "review_hint")
-# Estimate for the context budget: characters per token of JSON, code and English text (on the safe side).
-CHARS_PER_TOKEN = 2.5
-PATCH_SAMPLE_BYTES = 32 * 1024
+# The context budget (chars_per_token) is in ReportConfig, the example and patch sizes in InputConfig.
 PATCH_SAMPLE_LINES_PER_FILE = 30
-EXAMPLE_LINES = 10
 EXCLUDED_EXAMPLES = 5
 SAMPLE_LOCATIONS = 5
 SUMMARY_LIST_MIN = 5
@@ -153,7 +150,7 @@ def _run_tools(tools: list[dict]) -> list[dict]:
 # --- security ---
 
 
-def build_security(area: AreaItems, decisions: dict[str, dict], run_dir: Path) -> Draft:
+def build_security(area: AreaItems, decisions: dict[str, dict], run_dir: Path, limits: InputConfig) -> Draft:
     rows: list[tuple[str, dict, dict, dict]] = []
     inputs: dict[str, dict] = {}
     labels: list[str] = []
@@ -203,6 +200,8 @@ def build_security(area: AreaItems, decisions: dict[str, dict], run_dir: Path) -
         "report_entries": len(report_entries),
         "real_by_severity": by_severity([entry["severity"] for entry in real]),
         "low_confidence": sum(1 for entry in report_entries if entry["review"]),
+        # Findings of step 3 with another category than security, correctness or reliability: in code quality.
+        "static_findings_in_code_quality": area.facts.get("static_in_code_quality", 0),
     }
     report = {
         "area": "security",
@@ -272,7 +271,7 @@ def _hunks(patch: str) -> list[tuple[str, list[str]]]:
     return hunks
 
 
-def patch_example(patch: str, limit: int = EXAMPLE_LINES) -> dict | None:
+def patch_example(patch: str, limit: int = InputConfig.diff_example_lines) -> dict | None:
     """The first hunk, at most `limit` lines, copied verbatim."""
     hunks = _hunks(patch)
     if not hunks:
@@ -307,7 +306,7 @@ def excluded_groups(excluded: list[dict]) -> list[dict]:
             for reason, files in sorted(groups.items(), key=lambda entry: (-len(entry[1]), entry[0]))]
 
 
-def build_lint(area: AreaItems, decisions: dict[str, dict], run_dir: Path) -> Draft:
+def build_lint(area: AreaItems, decisions: dict[str, dict], run_dir: Path, limits: InputConfig) -> Draft:
     groups = []
     for item in area.items:
         decision = _decision(decisions, item["id"], "REAL")
@@ -316,6 +315,7 @@ def build_lint(area: AreaItems, decisions: dict[str, dict], run_dir: Path) -> Dr
             "label": decision["label"],
             "tool": data.get("tool"),
             "rule_id": data.get("rule"),
+            "category": data.get("category"),  # static analysis only: the tool's classification
             "language": data.get("language"),
             "scope": data.get("scope"),
             "severity": data.get("severity"),
@@ -350,6 +350,8 @@ def build_lint(area: AreaItems, decisions: dict[str, dict], run_dir: Path) -> Dr
             real_by_severity[group["severity"] or "unknown"] += group["count"]
     statistics = {
         "input_findings": area.facts.get("input_findings", 0),
+        "lint_findings": area.facts.get("lint_findings", 0),
+        "static_findings": area.facts.get("static_findings", 0),
         "exact_duplicates": area.facts.get("exact_duplicates", 0),
         "groups": len(report_groups),
         "groups_by_label": _label_counts([group["label"] for group in report_groups]),
@@ -374,7 +376,7 @@ def build_lint(area: AreaItems, decisions: dict[str, dict], run_dir: Path) -> Dr
             **patch_stats(patch),
             "files_changed_by_the_tools": len(area.facts.get("changed_files", [])),
             "files_created_by_the_tools": len(area.facts.get("created_files", [])),
-            "example": patch_example(patch),
+            "example": patch_example(patch, limits.diff_example_lines),
         },
         "excluded_files": {"total": len(excluded), "groups": excluded_groups(excluded)},
     }
@@ -383,12 +385,13 @@ def build_lint(area: AreaItems, decisions: dict[str, dict], run_dir: Path) -> Dr
         "tools": report["run"]["tools"],
         "notes": area.notes,
         "real_groups": [{"id": group["group_id"], "tool": group["tool"], "rule": group["rule_id"],
+                         **({"category": group["category"]} if group["category"] else {}),
                          "scope": group["scope"], "count": group["count"]} for group in real],
         "filtered_groups": [{"id": group["group_id"], "label": group["label"], "rule": group["rule_id"],
                              "count": group["count"]} for group in report_groups if group["label"] != "REAL"],
         "formatter_changes": {key: value for key, value in report["formatter_changes"].items() if key != "example"},
         "excluded_files": report["excluded_files"],
-        "patch_sample": patch_sample(patch, PATCH_SAMPLE_BYTES),
+        "patch_sample": patch_sample(patch, limits.patch_sample_kib * 1024),
     }
     return Draft(report, inputs, facts, {"summary_text": "text", "run_notes": "text", "change_types": "list",
                                          "excluded_notes": "text"})
@@ -400,7 +403,7 @@ TEST_KINDS = {"test_failure": "failed_tests", "weak_file": "weakly_tested_file",
 TEST_KIND_ORDER = ("failed_tests", "weakly_tested_file", "surviving_mutant")
 
 
-def build_tests(area: AreaItems, decisions: dict[str, dict], run_dir: Path) -> Draft:
+def build_tests(area: AreaItems, decisions: dict[str, dict], run_dir: Path, limits: InputConfig) -> Draft:
     defaults = {"test_failure": "PROJECT", "weak_file": "CRITICAL", "mutant": "TEST_GAP"}
     rows = []
     for item in area.items:
@@ -486,8 +489,9 @@ BUILDERS: dict[str, Callable[[AreaItems, dict, Path], Draft]] = {
     "security": build_security, "code_quality": build_lint, "test_quality": build_tests}
 
 
-def build_report(area: AreaItems, decisions: dict[str, dict], run_dir: Path) -> Draft:
-    return BUILDERS[area.area](area, decisions, run_dir)
+def build_report(area: AreaItems, decisions: dict[str, dict], run_dir: Path,
+                 limits: InputConfig = InputConfig()) -> Draft:
+    return BUILDERS[area.area](area, decisions, run_dir, limits)
 
 
 # --- texts by the reasoning model ---
@@ -516,7 +520,7 @@ class TextWriter:
         self.system = render(self.prompt["System"], REPORT_LANGUAGE=language)
         self.stats = ReportStats()
         # What fits into one request: the context window minus the answer, in characters.
-        self.budget = int((config.num_ctx - config.num_predict) * CHARS_PER_TOKEN) - len(self.system)
+        self.budget = int((config.num_ctx - config.num_predict) * config.chars_per_token) - len(self.system)
 
     # entries
 
@@ -634,7 +638,8 @@ class TextWriter:
         if attempt:  # the same seed gives the same answer again
             options["seed"] = self.config.seed + attempt
         exchange = self.client.chat(self.config.model, self.system, user, schema, options=options,
-                                    think=self.config.think)
+                                    think=self.config.think, retries=self.config.retries,
+                                    timeout=self.config.timeout_seconds, keep_alive=self.config.keep_alive)
         self.log(exchange)
         self.stats.requests += 1
         self.stats.duration_seconds += exchange.duration_seconds

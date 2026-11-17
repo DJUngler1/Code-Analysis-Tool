@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from evaluation_data import DECISION_MODEL, REPORT_MODEL, FakeClient, FakeOllama, make_run
+from evaluation_data import DECISION_MODEL, REPORT_MODEL, FakeClient, FakeOllama, add_quality_findings, make_run
 
 from scheduler.config import Settings
 from scheduler.evaluation import run_evaluation
@@ -54,7 +54,47 @@ def test_full_evaluation(tmp_path):
     logged = read(step / "security" / "requests" / requests[-1])
     assert logged["response"]["message"]["thinking"] == "..."  # the model's reasoning is kept
     assert (run / "audit.md").is_file() and read(run / "audit.json")["key_figures"]["security"]["real"] == 3
-    assert "Labeling with pplx-decider-flash:latest" in out
+    assert f"Labeling with {DECISION_MODEL}" in out
+
+
+def test_static_findings_without_security_category_go_to_code_quality(tmp_path):
+    run = make_run(tmp_path)
+    add_quality_findings(run)
+    result, fake, out = evaluate(run)
+    assert result.complete, result.errors
+    step = run / "step6-llm-evaluation"
+    security = [item["id"] for item in read(step / "security" / "items.json")["items"]]
+    assert security == ["S-0001", "S-0003", "S-0007", "S-0008", "S-0009", "D-0001", "D-0003"]
+    quality = read(step / "code_quality" / "items.json")["items"]
+    assert sorted(item["kind"] for item in quality).count("static_group") == 2
+    # Both kinds of group are asked with the code quality prompt.
+    questions = [question["instructions"] for endpoint, body in fake.requests if endpoint == "/v1/systemone"
+                 for question in body["questions"].values()]
+    assert any("python:S1192" in text and "Which label fits this group of findings?" in text for text in questions)
+    assert "2 groups of static analysis findings" in out
+    text = (run / "audit.md").read_text()
+    assert ("3 findings of the static code analysis are in code quality (category neither security, correctness "
+            "nor reliability).") in text
+    assert "; 3 findings from the static code analysis);" in text
+    assert "| sonarqube / python:S1192 (maintainability) | main | 2 |" in text
+
+
+def test_settings_per_area_and_input_limits(tmp_path):
+    config = tmp_path / "code-analysis.toml"
+    config.write_text('[llm.input]\nmessage_chars = 10\n[llm.report]\nthink = "low"\nkeep_alive = "2m"\n'
+                      '[llm.report.security]\nthink = "high"\n')
+    run = make_run(tmp_path)
+    result, fake, _ = evaluate(run, settings=settings_for(config))
+    assert result.complete, result.errors
+    chats = [body for endpoint, body in fake.requests if endpoint == "/api/chat"]
+    security = [body for body in chats if "security analyst" in body["messages"][0]["content"]]
+    others = [body for body in chats if body not in security]
+    assert security and {body["think"] for body in security} == {"high"}
+    assert others and {body["think"] for body in others} == {"low"}
+    assert {body["keep_alive"] for body in chats} == {"2m"}
+    items = read(run / "step6-llm-evaluation" / "security" / "items.json")["items"]
+    assert items[0]["data"]["message"] == "SQL built…"  # message_chars = 10
+    assert "- Models (reports, Security): think high" in (run / "audit.md").read_text()
 
 
 def test_order_decisions_first_then_reports(tmp_path):
@@ -120,10 +160,12 @@ def test_unreachable_ollama(tmp_path):
 
 
 def test_ollama_stopping_during_the_reports(tmp_path):
+    config = tmp_path / "code-analysis.toml"
+    config.write_text("[llm.report]\nretries = 0\n")
     run = make_run(tmp_path)
     fake = FakeOllama()
     fake.fail.add("/api/chat")
-    result, fake, _ = evaluate(run, fake, client=FakeClient(fake, retries=0, max_failures=3))
+    result, fake, _ = evaluate(run, fake, client=FakeClient(fake, max_failures=3), settings=settings_for(config))
     assert not result.complete and "Ollama stopped answering" in result.errors[0]
     security = result.areas[0]
     assert security.status is Status.FAILED
@@ -181,7 +223,7 @@ def test_audit_content(tmp_path):
                      "<summary>Filtered (1)</summary>", "```diff\n@@ -1,3 +1,3 @@",
                      "| Python (requirements.txt) | coverage.py | ok | 60.0% | – |",
                      "| Security | E-004 | NOISE | 0.40 (low confidence) | Title of E-004 | – |",
-                     "pplx-decider-flash:latest (000000000000)"):
+                     f"{DECISION_MODEL} (000000000000)"):
         assert expected in text, expected
     audit = read(run / "audit.json")
     assert audit["areas"]["security"]["report"]["statistics"]["input_findings"] == 6

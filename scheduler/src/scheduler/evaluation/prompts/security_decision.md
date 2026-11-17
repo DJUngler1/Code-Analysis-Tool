@@ -1,8 +1,9 @@
 # Security – decision model
 
 Prompt of the decision model (Ollama's decision endpoint /v1/systemone) for
-the findings of steps 3 and 4. The tool reads the sections below; this
-introduction is not sent.
+the findings of step 4 and those of step 3 whose tool category is security,
+correctness or reliability, or missing (the others go to code quality). The tool
+reads the sections below; this introduction is not sent.
 
 - `## Context` is the shared input (`state`) of every request.
   `{{RUN_CONTEXT}}` becomes short facts about the run.
@@ -18,7 +19,7 @@ context short.
 
 ## Context
 
-You triage the findings of a security analysis of a software project: static code analysis (OpenGrep, SonarQube) and dependency checks (OSV-Scanner, package manager audits). Each question shows one finding and asks for exactly one label.
+You triage the findings of a security analysis of a software project: static code analysis (OpenGrep, SonarQube; the findings these tools classify as security issues or bugs (`category` security, correctness, reliability) or do not classify) and dependency checks (OSV-Scanner, package manager audits). Each question shows one finding and asks for exactly one label.
 
 Rules:
 1. When in doubt, choose REAL. Choose FALSE_POSITIVE or NOISE only when the data shown supports it. Missing information is not evidence.

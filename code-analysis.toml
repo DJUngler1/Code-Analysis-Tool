@@ -112,46 +112,75 @@ time_limit_minutes = 60
 #
 # Two models: a decision model labels each finding (or group of findings), a
 # reasoning model writes the reports from these labels. The final audit
-# (audit.md, audit.json) is built from the reports by the tool itself.
+# (audit.md, audit.json) is built from the reports by the tool itself. The two
+# models are never loaded at the same time: the tool unloads the decision model
+# before the reasoning model starts, and that one at the end.
+# Every key has a default; a key that is not listed here is an error.
 
 [llm]
-# Ollama's address as seen from the scheduler container. The environment
-# variable OLLAMA_BASE_URL (docker/.env) overrides it.
-base_url = "http://host.docker.internal:11434"
-# Language of the prose the reasoning model writes (reports, audit texts).
-report_language = "English"
-# Areas to evaluate: "security" (steps 3 and 4), "code_quality" (step 2),
-# "test_quality" (step 5).
-areas = ["security", "code_quality", "test_quality"]
-timeout_seconds = 900   # per request to Ollama
-retries = 2             # repetitions of a failed or invalid request
-keep_alive = "10m"      # how long Ollama keeps a model loaded between requests
-# The two models are never loaded at the same time: the tool unloads the
-# decision model before the reasoning model starts, and that one at the end.
+base_url = "http://host.docker.internal:11434"  # Ollama's address from the scheduler container; OLLAMA_BASE_URL in docker/.env overrides it
+report_language = "English"                       # language of the texts the reasoning model writes; "German" also gives German audit headings
+areas = ["security", "code_quality", "test_quality"]  # areas to evaluate; leave one out to skip it
 
-[llm.decision]
+# What the tool prepares for the models (and the excerpts in the reports).
+# Smaller values make requests smaller and faster, but the models see less.
+[llm.input]
+message_chars = 300             # characters of a finding's message (or an advisory's summary) the models see
+code_chars = 400                # characters of the code excerpt around a finding
+code_context_lines = 2          # lines of code before and after the finding in the excerpt
+group_samples = 5               # sample locations per group of code quality findings
+group_samples_with_code = 3     # how many of these samples include a code excerpt (at most group_samples)
+group_messages = 3              # different messages shown per group
+failed_tests_per_group = 5      # test names shown per group of failed tests
+failure_message_chars = 600     # characters of the failure message of a group of failed tests
+declaration_chars = 300         # characters of the declarations (classes, functions) of a weakly tested file
+weak_line_rate = 0.5            # source files below this line coverage (0.5 = 50 %) are labeled as weakly tested
+diff_example_lines = 10         # lines of the formatter example diff copied into the report
+patch_sample_kib = 32           # KiB of changes.patch the reasoning model reads to name the kinds of formatter change
+
 # Decision model, called through Ollama's decision endpoint (/v1/systemone).
 # Every finding (or group of findings) is one question; the model chooses one
 # label per question and returns the probability of each label. The rules are
-# the shared input of a request.
-model = "pplx-decider-flash:latest"
-# Ollama scores every question with its own copy of the shared input, so the
-# memory a request needs grows with the number of questions. Keep both limits
-# small: on a Mac with 32 GB, requests with 24 to 32 questions (30 KB) used up
-# the memory; requests with 8 questions took about 2 seconds.
-max_questions = 4         # questions per request (the endpoint allows at most 64)
-max_input_kib = 20         # text per request: shared input once per question, plus the questions
-review_confidence = 0.6    # decisions with a lower confidence are flagged for review
+# the shared input of a request. Ollama scores every question with its own copy
+# of the shared input, so the memory a request needs grows with the number of
+# questions: on a Mac with 32 GB, requests with 24 to 32 questions (30 KB) used
+# up the memory; requests with 8 questions took about 2 seconds.
+[llm.decision]
+model = "pplx-decider-flash:latest"  # the decision model; it must be installed (`ollama pull <model>`)
+timeout_seconds = 300                # time limit per request, including loading the model
+retries = 2                          # repetitions of a failed request with one question (larger requests are split instead)
+keep_alive = "10m"                   # how long Ollama keeps the model loaded between requests ("10m", or seconds)
+max_questions = 4                    # questions (findings) per request; the endpoint allows at most 64
+max_input_kib = 20                   # text per request in KiB: the shared input once per question, plus the questions
+review_confidence = 0.6              # decisions with a lower confidence are flagged for review in the audit
 
-[llm.report]
 # Reasoning model, called through Ollama's chat endpoint (/api/chat) with a
-# JSON schema for the answer. qwen3.8 needs about 17 GB plus its context.
-model = "gpt-oss:20b"
-think = true              # let the model reason before it answers
-temperature = 0.6
-top_p = 0.95
-top_k = 20
-seed = 42
-num_ctx = 16384           # context window in tokens (prompt and answer)
-num_predict = 6144        # maximum tokens per answer, including the reasoning
-entries_per_request = 10  # report entries written per request
+# JSON schema for the answer. It needs a build with structured output: GGUF
+# (llama.cpp), not MLX, which answers "HTTP 501: structured output is unavailable".
+[llm.report]
+model = "gpt-oss:20b"          # the reasoning model; it must be installed (`ollama pull <model>`)
+timeout_seconds = 900          # time limit per request, including loading the model and its reasoning
+retries = 2                    # repetitions of a failed request, and of an answer that is not valid (with another seed)
+keep_alive = "10m"             # how long Ollama keeps the model loaded between requests ("10m", or seconds)
+think = true                   # reasoning before the answer: true, false, or a level of the model, e.g. "low", "medium", "high" (gpt-oss); false on a model that always reasons gives its lowest level
+temperature = 0.6              # randomness of the text: 0 = always the most likely token, higher = more varied
+top_p = 0.95                   # only tokens within this cumulative probability are considered
+top_k = 20                     # only the 20 most likely tokens are considered
+# min_p = 0.0                  # tokens below this probability (relative to the most likely one) are left out; not set: the model's default
+seed = 42                      # random seed for reproducible answers; a repeated request uses seed + 1, seed + 2, ...
+num_ctx = 16384                # context window in tokens: prompt and answer together (more needs more memory)
+num_predict = 6144             # maximum tokens per answer, including the reasoning; must be smaller than num_ctx
+entries_per_request = 10       # report entries written per request (fewer if they do not fit the context window)
+chars_per_token = 2.5          # estimate used to fit entries into num_ctx; lower is safer, higher packs more per request
+
+# Optional: the reasoning model's settings for one area. Every key of
+# [llm.report] except model is possible; keys not set here come from [llm.report].
+[llm.report.security]
+# think = "high"               # e.g. reason more for the security texts
+
+[llm.report.code_quality]
+# think = "low"                # e.g. reason less for the code quality texts
+# entries_per_request = 15     # e.g. more groups per request
+
+[llm.report.test_quality]
+# num_predict = 8192           # e.g. longer answers for the test assessments

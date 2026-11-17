@@ -4,8 +4,8 @@ This document defines step 6 of the workflow, "LLM evaluation" and "Final audit"
 
 | Area | Results of | Question |
 |---|---|---|
-| Security | Step 3 (OpenGrep, SonarQube) and step 4 (OSV-Scanner, package manager audits) | Which findings are real security issues of the shipped product? |
-| Code quality | Step 2 (linters and formatters) | Which lint findings matter, and what did the formatters change? |
+| Security | Step 4 (OSV-Scanner, package manager audits) and the findings of step 3 (OpenGrep, SonarQube) that their tool classifies as security issues or bugs (`security`, `correctness`, `reliability`), or not at all | Which findings are real security issues of the shipped product? |
+| Code quality | Step 2 (linters and formatters) and the other findings of step 3 (maintainability, best practice, portability, performance, …) | Which findings matter, and what did the formatters change? |
 | Test quality | Step 5 (tests, coverage, mutation testing) | Do the tests work, and what do they miss? |
 
 Two local models run through [Ollama](https://ollama.com) on the host:
@@ -16,25 +16,63 @@ Everything that can be computed is done by the tool itself, not by a model: ids,
 
 ## Configuration
 
-`[llm]`, `[llm.decision]` and `[llm.report]` in [`code-analysis.toml`](../../code-analysis.toml), read at every run:
+Five kinds of table in [`code-analysis.toml`](../../code-analysis.toml), read at every run. Each key has a comment there. A missing key takes the default below; an unknown key, or an area name that does not exist, is an error (exit code 9), so a typo is not ignored.
+
+**`[llm]`**
 
 | Key | Default | Meaning |
 |---|---|---|
-| `llm.base_url` | `http://host.docker.internal:11434` | Ollama's address from the container; `OLLAMA_BASE_URL` in `docker/.env` overrides it |
-| `llm.report_language` | `English` | Language of the texts the reasoning model writes, and of the audit's headings (`German` gives German headings) |
-| `llm.areas` | all three | Areas to evaluate: `security`, `code_quality`, `test_quality` |
-| `llm.timeout_seconds` | 900 | Time limit per request |
-| `llm.retries` | 2 | Repetitions of a failed request, and of an answer that is not valid |
-| `llm.keep_alive` | `10m` | How long Ollama keeps a model loaded between requests |
-| `llm.decision.model` | `pplx-decider-flash:latest` | The decision model |
-| `llm.decision.max_questions` | 8 | Items per request (the endpoint allows 64) |
-| `llm.decision.max_input_kib` | 20 | Text per request: the shared input once per question, plus the questions |
-| `llm.decision.review_confidence` | 0.6 | Decisions with a lower confidence are flagged for review |
-| `llm.report.model` | `qwen3.8:latest` | The reasoning model |
-| `llm.report.think` | `true` | Let the model reason before it answers |
-| `llm.report.temperature`, `top_p`, `top_k`, `seed` | 0.6, 0.95, 20, 42 | Generation options |
-| `llm.report.num_ctx`, `num_predict` | 16384, 6144 | Context window and the maximum number of tokens to generate |
-| `llm.report.entries_per_request` | 10 | Report entries written per request |
+| `base_url` | `http://host.docker.internal:11434` | Ollama's address from the container; `OLLAMA_BASE_URL` in `docker/.env` overrides it |
+| `report_language` | `English` | Language of the texts the reasoning model writes, and of the audit's headings (`German` gives German headings) |
+| `areas` | all three | Areas to evaluate: `security`, `code_quality`, `test_quality` |
+
+**`[llm.input]`**: what the tool prepares for the models, and the excerpts in the reports. Smaller values make requests smaller and faster, but the models see less.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `message_chars` | 300 | Characters of a finding's message or an advisory's summary |
+| `code_chars` | 400 | Characters of the code excerpt around a finding |
+| `code_context_lines` | 2 | Lines of code before and after the finding |
+| `group_samples` | 5 | Sample locations per group of code quality findings |
+| `group_samples_with_code` | 3 | How many of these samples include a code excerpt (at most `group_samples`) |
+| `group_messages` | 3 | Different messages shown per group |
+| `failed_tests_per_group` | 5 | Test names shown per group of failed tests |
+| `failure_message_chars` | 600 | Characters of the failure message of a group of failed tests |
+| `declaration_chars` | 300 | Characters of the declarations (classes, functions) of a weakly tested file |
+| `weak_line_rate` | 0.5 | Source files below this line coverage are weakly tested |
+| `diff_example_lines` | 10 | Lines of the formatter example diff in the report |
+| `patch_sample_kib` | 32 | KiB of `changes.patch` the reasoning model reads to name the kinds of formatter change |
+
+**`[llm.decision]`**: the decision model.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `model` | `pplx-decider-flash:latest` | The decision model |
+| `timeout_seconds` | 300 | Time limit per request, including loading the model |
+| `retries` | 2 | Repetitions of a failed request with one item; a request with several items is split in half instead |
+| `keep_alive` | `10m` | How long Ollama keeps the model loaded between requests |
+| `max_questions` | 8 | Items per request (the endpoint allows 64) |
+| `max_input_kib` | 20 | Text per request: the shared input once per question, plus the questions |
+| `review_confidence` | 0.6 | Decisions with a lower confidence are flagged for review |
+
+The endpoint has no generation options ("generation controls are not supported").
+
+**`[llm.report]`**: the reasoning model.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `model` | `qwen3.8:latest` | The reasoning model; it needs a build with structured output (GGUF, not MLX) |
+| `timeout_seconds` | 900 | Time limit per request, including loading the model and its reasoning |
+| `retries` | 2 | Repetitions of a failed request, and of an answer that is not valid (with another seed) |
+| `keep_alive` | `10m` | How long Ollama keeps the model loaded between requests |
+| `think` | `true` | Reasoning before the answer: `true`, `false` or a level of the model, e.g. `"low"`, `"medium"`, `"high"` for gpt-oss (the values `/api/show` lists under `thinking.values`). A model that cannot switch reasoning off uses its lowest level for `false`; an unknown level gives the model's default |
+| `temperature`, `top_p`, `top_k`, `seed` | 0.6, 0.95, 20, 42 | Generation options |
+| `min_p` | not set | Minimum probability of a token; not set: not sent, the model's default applies |
+| `num_ctx`, `num_predict` | 16384, 6144 | Context window and the maximum number of tokens to generate (`num_predict` must be smaller) |
+| `entries_per_request` | 10 | Report entries written per request |
+| `chars_per_token` | 2.5 | Estimate the tool uses to fit entries into `num_ctx − num_predict`; lower is safer |
+
+**`[llm.report.security]`, `[llm.report.code_quality]`, `[llm.report.test_quality]`** (optional): the reasoning model's settings for one area. Every key of `[llm.report]` except `model` is possible; keys that are not set come from `[llm.report]`. Example: `think = "high"` for security and `think = "low"` for code quality. The audit lists these settings under "Method and limits".
 
 Both models must be installed in Ollama (`ollama pull <model>`). The tool checks this at the start and names missing models.
 
@@ -44,12 +82,21 @@ The tool reads the results of steps 2 to 5 from the run folder and builds the it
 
 | Area | Item | Id | Built from |
 |---|---|---|---|
-| Security | Static finding | `S-0001` | `step3-static-analysis/findings.json` |
+| Security | Static finding with the category `security`, `correctness`, `reliability` or none | `S-0001` | `step3-static-analysis/findings.json` |
 | Security | Dependency finding | `D-0001` | `step4-dependencies/findings.json` |
 | Code quality | Group of lint findings: same tool, rule and scope | `L-001` | `step2-linting/findings.json` (exact duplicates removed) |
+| Code quality | Group of static findings with another category: same tool, rule and scope | `L-001` (numbered together with the lint groups) | `step3-static-analysis/findings.json` (exact duplicates removed) |
 | Test quality | Group of failed tests of a suite with the same failure message (numbers, paths and quoted text left out) | `T-001` | `step5-tests/tests.json` |
-| Test quality | Source file the tests did not load or cover to less than half of its lines | `F-0001` | `step5-tests/coverage.json`, `mutants.json` |
+| Test quality | Source file the tests did not load or cover to less than `weak_line_rate` (half) of its lines | `F-0001` | `step5-tests/coverage.json`, `mutants.json` |
 | Test quality | Mutant the tests ran but did not detect (`Survived`) | `M-0001` | `step5-tests/mutants.json` |
+
+**Findings of step 3** are divided by their tool's own classification, the `category` in `findings.json` (see [static analysis](../staticAnalysis/README.md)): OpenGrep takes it from the rule's metadata, SonarQube from the software quality of the issue's highest impact (security hotspots are always `security`).
+- `security`: security.
+- `correctness` (OpenGrep) and `reliability` (SonarQube): security as well. Both mean bugs, and bugs can have security consequences; a finding rated too high is better than one overlooked. Examples: OpenGrep's `double_goto` (the pattern of the "goto fail" bug in a TLS check) and `tempfile-insecure` (`tempfile.mktemp`) are `correctness` rules without a CWE; SonarQube's `S8786` (a regular expression with super-linear backtracking) is `reliability`.
+- No category: security. Without a category the tool cannot tell, so the finding stays where it is checked more strictly.
+- Every other category (`maintainability`, `best-practice`, `portability`, `performance`, …): code quality, grouped like the lint findings.
+
+The ids of static findings count all findings of `findings.json` (`S-0005` is the fifth), so the security items have gaps. The reason for the split: in a run on a TypeScript project, only 15 of the 614 findings in the security area were security findings by their tool's classification. 494 came from one OpenGrep i18n rule. The reasoning model wrote a text for each of them, which took 66 of the 87 minutes of step 6. With the split, that run has 31 security items (12 `security`, 11 `reliability`, 5 `correctness`, 3 dependencies), and the 594 other findings are 31 code quality groups.
 
 **Duplicates** (security only) are merged by the tool, not by a model:
 - static findings in the same file at overlapping lines with the same rule or a shared CWE, also across tools;
@@ -59,7 +106,7 @@ One finding per group is kept: the most precise one (with CWE, smallest range; f
 
 **Scope** of a file, from its path: `generated` (left out by step 2), `vendored` (`vendor/`, `third_party/`, `node_modules/`, …), `test` (test folders and test file names), `docs/examples`, `ci`, `scripts` or `main`.
 
-**What a model sees:** the facts of each item in compact form, e.g. tool, rule, severity, CWE, message, file, line, scope and up to two lines of code around the finding (at most 400 characters), read from the project as step 2 left it. For weakly tested files, the declarations in the file (classes, functions). Never the complete result files.
+**What a model sees:** the facts of each item in compact form, e.g. tool, rule, severity, CWE, message, file, line, scope and up to two lines of code around the finding (at most 400 characters), read from the project as step 2 left it. The limits are set in `[llm.input]`. For weakly tested files, the declarations in the file (classes, functions). Never the complete result files.
 
 ## 2. Decisions
 
@@ -79,11 +126,12 @@ The decision model is called through Ollama's decision endpoint `POST /v1/system
 
 ## 3. Reports
 
-For each area, the tool builds the report and the reasoning model writes its texts. The model is called through `POST /api/chat` with a JSON schema for the answer (`format`), `think` and the generation options of `[llm.report]`.
+For each area, the tool builds the report and the reasoning model writes its texts. The model is called through `POST /api/chat` with a JSON schema for the answer (`format`), `think` and the generation options of `[llm.report]`, or of the area's own table.
 
 **Built by the tool:**
 - **Security:** one entry per finding that is not a duplicate (`E-001`), with all merged ids in `source_ids`, tools, rule ids, CWE/CVE/other identifiers, location or package with the fixed versions, severity as the tools report it, label and confidence. Sorted: `REAL` first (by severity), then `FALSE_POSITIVE`, then `NOISE`. Statistics: findings per label, `REAL` per severity, low-confidence decisions. Every input id is in exactly one entry.
-- **Code quality:** one group per lint group (`G-001`) with count, files, severity, sample locations and messages; formatter changes from `changes.patch` (tools that changed files, files, added and removed lines, the first hunk as an example, at most 10 lines copied verbatim); excluded files grouped by reason.
+- **Security**, in addition: the number of findings of step 3 that are in the code quality report.
+- **Code quality:** one group per lint or static analysis group (`G-001`) with tool, rule, the tool's category (static analysis only), count, files, severity, sample locations and messages; the findings of step 2 and of step 3 counted separately; formatter changes from `changes.patch` (tools that changed files, files, added and removed lines, the first hunk as an example, at most 10 lines copied verbatim); excluded files grouped by reason.
 - **Test quality:** one entry per item (`E-001`): failed tests, weakly tested files, surviving mutants; the test runs, coverage and mutation results of step 5.
 
 **Written by the reasoning model:**

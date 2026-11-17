@@ -48,8 +48,11 @@ TEXTS = {
         "low_confidence": "low confidence", "no_review": "Nothing to review.",
         "security_line": "Security: {real} REAL findings{severity} of {total} findings; {filtered} filtered, "
                          "{duplicates} duplicates merged.",
+        "security_moved": " {moved} findings of the static code analysis are in code quality (category neither "
+                          "security, correctness nor reliability).",
         "lint_line": "Code quality: {real_groups} REAL groups with {real} findings of {total} findings "
-                     "({groups} groups); the formatters changed {files} files (+{added} / −{removed} lines).",
+                     "({groups} groups{static}); the formatters changed {files} files (+{added} / −{removed} lines).",
+        "lint_static": "; {count} findings from the static code analysis",
         "tests_line": "Tests: {counts}.",
         "coverage_line": "Line coverage: {values}.", "mutation_line": "Mutation score: {values}.",
         "review_line": "To review: {low} decisions with low confidence, {hints} review hints.",
@@ -86,8 +89,11 @@ TEXTS = {
         "no_review": "Nichts zu prüfen.",
         "security_line": "Sicherheit: {real} REAL-Befunde{severity} von {total} Befunden; {filtered} "
                          "herausgefiltert, {duplicates} Duplikate zusammengeführt.",
-        "lint_line": "Codequalität: {real_groups} REAL-Gruppen mit {real} von {total} Befunden ({groups} Gruppen); "
-                     "die Formatter änderten {files} Dateien (+{added} / −{removed} Zeilen).",
+        "security_moved": " {moved} Befunde der statischen Codeanalyse stehen unter Codequalität (Kategorie "
+                          "weder security noch correctness noch reliability).",
+        "lint_line": "Codequalität: {real_groups} REAL-Gruppen mit {real} von {total} Befunden ({groups} Gruppen"
+                     "{static}); die Formatter änderten {files} Dateien (+{added} / −{removed} Zeilen).",
+        "lint_static": "; {count} Befunde aus der statischen Codeanalyse",
         "tests_line": "Tests: {counts}.",
         "coverage_line": "Zeilenabdeckung: {values}.", "mutation_line": "Mutations-Score: {values}.",
         "review_line": "Zu prüfen: {low} Entscheidungen mit niedriger Konfidenz, {hints} Prüfhinweise.",
@@ -145,6 +151,7 @@ def build_audit(run_dir: Path, evaluation: dict) -> dict:
             "settings": {key: settings.get(key) for key in ("report_language", "areas")} if settings else {},
             "decision": settings.get("decision"),
             "report": settings.get("report"),
+            "report_overrides": settings.get("report_overrides") or {},
             "errors": evaluation.get("errors", []),
         },
     }
@@ -162,6 +169,7 @@ def key_figures(reports: dict[str, dict | None]) -> dict:
             "real_by_severity": stats.get("real_by_severity", {}),
             "filtered": labels.get("FALSE_POSITIVE", 0) + labels.get("NOISE", 0),
             "duplicates": labels.get("DUPLICATE", 0),
+            "static_in_code_quality": stats.get("static_findings_in_code_quality", 0),
         }
     lint = reports.get("code_quality")
     if lint:
@@ -169,6 +177,7 @@ def key_figures(reports: dict[str, dict | None]) -> dict:
         changes = lint.get("formatter_changes", {})
         figures["code_quality"] = {
             "findings": stats.get("input_findings", 0),
+            "static_findings": stats.get("static_findings", 0),
             "groups": stats.get("groups", 0),
             "real_groups": stats.get("groups_by_label", {}).get("REAL", 0),
             "real_findings": stats.get("findings_by_label", {}).get("REAL", 0),
@@ -247,6 +256,12 @@ def location(entry: dict) -> str:
     return f"{first.get('file')}:{first['line']}" if first.get("line") else str(first.get("file"))
 
 
+def tool_rule(group: dict) -> str:
+    """Tool and rule of a code quality group; for static analysis also the tool's category."""
+    text = f"{group.get('tool')} / {group.get('rule_id')}"
+    return f"{text} ({group['category']})" if group.get("category") else text
+
+
 def render_markdown(audit: dict) -> str:
     t = TEXTS[audit["language"]]
     project = audit.get("project") or "?"
@@ -285,11 +300,15 @@ def _key_figures(audit: dict, t: dict) -> list[str]:
         lines.append("- " + t["security_line"].format(real=security["real"], total=security["findings"],
                                                       severity=f" ({severity})" if severity else "",
                                                       filtered=security["filtered"],
-                                                      duplicates=security["duplicates"]))
+                                                      duplicates=security["duplicates"])
+                     + (t["security_moved"].format(moved=security["static_in_code_quality"])
+                        if security.get("static_in_code_quality") else ""))
     lint = figures.get("code_quality")
     if lint:
         lines.append("- " + t["lint_line"].format(real_groups=lint["real_groups"], real=lint["real_findings"],
                                                   total=lint["findings"], groups=lint["groups"],
+                                                  static=t["lint_static"].format(count=lint["static_findings"])
+                                                  if lint.get("static_findings") else "",
                                                   files=lint["files_changed"], added=lint["lines_added"],
                                                   removed=lint["lines_removed"]))
     tests = figures.get("test_quality")
@@ -356,14 +375,14 @@ def _code_quality(area: dict, t: dict) -> list[str]:
     if real:
         lines += table([t["id"], t["severity"], t["tool_rule"], t["scope"], t["findings"], t["title_col"],
                         t["recommendation"]],
-                       [[group["group_id"], group.get("severity"), f"{group.get('tool')} / {group.get('rule_id')}",
+                       [[group["group_id"], group.get("severity"), tool_rule(group),
                          group.get("scope"), group.get("count"), group.get("title"), group.get("recommendation")]
                         for group in real])
         lines.append("")
     if other:
         lines += details(f"{t['filtered']} ({len(other)})",
                          table([t["id"], t["label"], t["tool_rule"], t["scope"], t["findings"], t["reason"]],
-                               [[group["group_id"], group["label"], f"{group.get('tool')} / {group.get('rule_id')}",
+                               [[group["group_id"], group["label"], tool_rule(group),
                                  group.get("scope"), group.get("count"), group.get("reason")] for group in other]))
         lines.append("")
     changes = report.get("formatter_changes") or {}
@@ -489,10 +508,15 @@ def _method(audit: dict, t: dict) -> list[str]:
     for role in ("decision", "report"):
         if role in models:
             settings = method.get(role) or {}
-            options = ", ".join(f"{key} {value}" for key, value in settings.items() if key != "model")
+            options = ", ".join(f"{key} {value}" for key, value in settings.items()
+                                if key != "model" and value is not None)
             digest = (models[role].get("digest") or "").split(":")[-1][:12]
             lines.append(f"- {t['models']} ({t[role + '_model']}): {models[role]['name']}"
                          + (f" ({digest})" if digest else "") + (f"; {options}" if options else ""))
+    if "report" in models:
+        for area, overrides in (method.get("report_overrides") or {}).items():
+            options = ", ".join(f"{key} {value}" for key, value in overrides.items())
+            lines.append(f"- {t['models']} ({t['report_model']}, {t[area].split('. ', 1)[-1]}): {options}")
     lines.append(f"- {t['method_labels']}")
     for error in method.get("errors", []):
         lines.append(f"- {error}")

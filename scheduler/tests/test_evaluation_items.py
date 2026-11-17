@@ -1,11 +1,11 @@
 """Step 6: the configuration, the prompts and the items Python prepares for the models."""
 
 import pytest
-from evaluation_data import make_run
+from evaluation_data import add_quality_findings, make_run
 
 from scheduler.evaluation.config import ConfigError, LlmConfig, load_config
-from scheduler.evaluation.items import (SourceReader, failure_cause, lint_items, path_scope, project_of,
-                                        security_items, test_items)
+from scheduler.evaluation.items import (SourceReader, code_quality_items, failure_cause, is_security, path_scope,
+                                        project_of, security_items, test_items)
 from scheduler.evaluation.prompts import decision_prompt, render, report_prompt
 
 from conftest import REPOSITORY
@@ -27,13 +27,53 @@ def test_defaults_without_a_file():
     assert load_config(None) == LlmConfig()
 
 
+def test_fine_grained_settings(tmp_path):
+    config = load_config(write_config(tmp_path, """
+[llm.input]
+code_chars = 200
+weak_line_rate = 0.8
+[llm.decision]
+timeout_seconds = 60
+keep_alive = 120
+[llm.report]
+think = "medium"
+min_p = 0.05
+retries = 1
+[llm.report.security]
+think = "high"
+num_predict = 8192
+[llm.report.code_quality]
+"""))
+    assert config.input.code_chars == 200 and config.input.weak_line_rate == 0.8
+    assert config.input.message_chars == 300  # not set: the default
+    assert (config.decision.timeout_seconds, config.decision.keep_alive) == (60, "120")
+    assert config.report.think == "medium" and config.report.options()["min_p"] == 0.05
+    assert "min_p" not in LlmConfig().report.options()  # not set: not sent, the model's default applies
+    assert config.report_overrides == {"security": {"think": "high", "num_predict": 8192}}  # empty tables: nothing
+    security = config.report_for("security")
+    assert (security.think, security.num_predict, security.min_p, security.retries) == ("high", 8192, 0.05, 1)
+    assert config.report_for("code_quality") == config.report
+    assert load_config(write_config(tmp_path, "[llm.report]\nthink = false\n")).report.think is False
+
+
 @pytest.mark.parametrize("text, message", [
     ('[llm]\nareas = ["security", "style"]\n', "llm.areas"),
     ("[llm.decision]\nmax_questions = 65\n", "at most 64"),
     ("[llm.decision]\nreview_confidence = 1.5\n", "review_confidence"),
-    ('[llm.report]\nthink = "yes"\n', "true or false"),
+    ('[llm.report]\nthink = 2\n', 'true, false or a level'),
+    ('[llm.report]\nthink = " "\n', 'true, false or a level'),
     ("[llm.report]\nnum_ctx = 512\n", "num_ctx"),
-    ('[llm]\nkeep_alive = true\n', "keep_alive"),
+    ("[llm.report]\nnum_ctx = 4096\nnum_predict = 4096\n", "smaller than num_ctx"),
+    ("[llm.report]\nmin_p = 1.5\n", "min_p"),
+    ('[llm.decision]\nkeep_alive = true\n', "keep_alive"),
+    ("[llm]\ntimeout_seconds = 60\n", "set per model now"),
+    ("[llm.decision]\nmax_question = 4\n", "llm.decision.max_question is not a setting"),
+    ("[llm.input]\ncode_chars = 0\n", "llm.input.code_chars"),
+    ("[llm.input]\ngroup_samples = 2\ngroup_samples_with_code = 3\n", "at most group_samples"),
+    ("[llm.input]\nweak_line_rate = 2\n", "weak_line_rate"),
+    ("[llm.report.securty]\nthink = true\n", "not an area"),
+    ('[llm.report.security]\nmodel = "x"\n', "all areas use the reasoning model"),
+    ("[llm.report.security]\ntemprature = 0.2\n", "llm.report.security.temprature is not a setting"),
 ])
 def test_invalid_values_name_the_key(tmp_path, text, message):
     with pytest.raises(ConfigError, match=message):
@@ -94,7 +134,7 @@ def test_security_without_steps_3_and_4(tmp_path):
 
 def test_lint_groups_by_tool_rule_and_scope(tmp_path):
     run = make_run(tmp_path)
-    area = lint_items(run, SourceReader(project_of(run)))
+    area = code_quality_items(run, SourceReader(project_of(run)))
     groups = {(item["data"]["tool"], item["data"]["rule"], item["data"]["scope"]): item for item in area.items}
     assert set(groups) == {("ruff check", "F401", "main"), ("ruff check", "E501", "test"),
                            ("biome", "lint/style/useTemplate", "main")}
@@ -103,6 +143,51 @@ def test_lint_groups_by_tool_rule_and_scope(tmp_path):
     assert area.facts["exact_duplicates"] == 1
     assert groups[("biome", "lint/style/useTemplate", "main")]["data"]["fixed_by_the_tool"] == 1
     assert [item["id"] for item in area.items] == ["L-001", "L-002", "L-003"]
+
+
+@pytest.mark.parametrize("category, security", [("security", True), ("Security", True), (None, True), ("", True),
+                                                ("correctness", True), ("reliability", True),
+                                                ("maintainability", False), ("best-practice", False),
+                                                ("portability", False), ("performance", False)])
+def test_security_by_the_tools_category(category, security):
+    assert is_security({"category": category}) is security
+
+
+def test_static_findings_split_by_category(tmp_path):
+    run = make_run(tmp_path)
+    add_quality_findings(run)
+    reader = SourceReader(project_of(run))
+    security = security_items(run, reader)
+    # The ids still count all findings of step 3; S-0004 to S-0006 are in code quality.
+    assert [item["id"] for item in security.items] == ["S-0001", "S-0003", "S-0007", "S-0008", "S-0009", "D-0001",
+                                                       "D-0003"]
+    assert security.facts["static_findings"] == 9 and security.facts["static_in_code_quality"] == 3
+    quality = code_quality_items(run, reader)
+    groups = {(item["data"]["tool"], item["data"]["rule"], item["data"]["scope"]): item for item in quality.items}
+    smell = groups[("sonarqube", "python:S1192", "main")]
+    assert smell["kind"] == "static_group"
+    assert smell["data"]["kind"] == "group of static analysis findings"
+    assert smell["data"]["category"] == "maintainability" and smell["data"]["subcategory"] == ["code_smell"]
+    assert smell["data"]["count"] == 2 and "fixed_by_the_tool" not in smell["data"]
+    assert groups[("opengrep", "python.pass-body-fn", "test")]["data"]["category"] == "Best-Practice"
+    assert "category" not in groups[("ruff check", "F401", "main")]["data"]
+    assert (quality.facts["lint_findings"], quality.facts["static_findings"], quality.facts["input_findings"]) == (
+        5, 3, 8)
+    assert [tool["name"] for tool in quality.facts["tools"]] == ["ruff check", "biome", "opengrep", "sonarqube"]
+    assert quality.context["static_analysis"] == ["opengrep 1.33.1 (ok)", "sonarqube 26.9 (ok)"]
+
+
+def test_code_quality_with_step_3_only(tmp_path):
+    run = make_run(tmp_path, steps=(3,))
+    add_quality_findings(run)
+    area = code_quality_items(run, SourceReader(project_of(run)))
+    assert area.available and area.notes == ["Step 2 (linters and formatters) did not run."]
+    assert {item["kind"] for item in area.items} == {"static_group"} and len(area.items) == 2
+
+
+def test_code_quality_without_steps_2_and_3(tmp_path):
+    area = code_quality_items(make_run(tmp_path, steps=(4, 5)), SourceReader(None))
+    assert not area.available and area.items == []
 
 
 def test_test_items(tmp_path):

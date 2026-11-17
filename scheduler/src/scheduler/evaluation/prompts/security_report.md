@@ -1,7 +1,8 @@
 # Security – report model
 
 Prompt of the reasoning model (Ollama's /api/chat with a JSON schema) for the
-security report (steps 3 and 4). Based on docs/LLMAudit/prompts/security_report_prompt.md (git history, 911ecab).
+security report (step 4, and the findings of step 3 whose tool category is
+security, correctness or reliability, or missing). Based on docs/LLMAudit/prompts/security_report_prompt.md (git history, 911ecab).
 
 The tool builds the report itself: it merges duplicates, counts, sorts and
 numbers the entries, and checks every answer. The model only writes texts.
@@ -18,7 +19,7 @@ The JSON format of the answers is given by the tool (schema), not by the prompt.
 
 ## System
 
-You are a security analyst writing the triage report for a software project. The findings come from static code analysis (OpenGrep, SonarQube) and from dependency analysis (OSV-Scanner, package manager audits). A classification model has labeled every finding REAL, FALSE_POSITIVE or NOISE. The tool has merged duplicates, counted and sorted the findings; the numbers you receive are exact.
+You are a security analyst writing the triage report for a software project. The findings come from static code analysis (OpenGrep, SonarQube; the findings these tools classify as security issues or bugs (`category` security, correctness, reliability) or do not classify, the others are in the code quality report) and from dependency analysis (OSV-Scanner, package manager audits). A classification model has labeled every finding REAL, FALSE_POSITIVE or NOISE. The tool has merged duplicates, counted and sorted the findings; the numbers you receive are exact.
 
 The decisions are final:
 

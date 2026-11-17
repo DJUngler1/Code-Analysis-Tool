@@ -6,10 +6,17 @@ import json
 import re
 from pathlib import Path
 
+from scheduler.evaluation.config import DecisionConfig, ReportConfig, load_config
 from scheduler.evaluation.ollama import OllamaClient, OllamaError
 
-DECISION_MODEL = "pplx-decider-flash:latest"
-REPORT_MODEL = "qwen3.8:latest"
+from conftest import REPOSITORY
+
+# The models of the repository's code-analysis.toml, so the tests do not depend on which ones are configured.
+_CONFIG = load_config(REPOSITORY / "code-analysis.toml")
+DECISION_MODEL = _CONFIG.decision.model
+REPORT_MODEL = _CONFIG.report.model
+# Installed in the fake Ollama: those models, and the defaults for test configurations without [llm.*] model.
+INSTALLED = tuple(dict.fromkeys((DECISION_MODEL, REPORT_MODEL, DecisionConfig.model, ReportConfig.model)))
 
 PATCH = """diff --git a/src/util.js b/src/util.js
 index 1111111..2222222 100644
@@ -41,6 +48,38 @@ def make_project(root: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     return root
+
+
+# Findings of step 3 for code quality (S-0004 to S-0006: maintainability, best-practice), and for security:
+# without a category (S-0007), reliability (S-0008, a SonarQube bug) and correctness (S-0009, an OpenGrep bug).
+QUALITY_FINDINGS = [
+    {"tool": "sonarqube", "rule": "python:S1192", "severity": "warning", "tool_severity": "MEDIUM",
+     "message": "Define a constant instead of duplicating this literal", "language": "Python", "file": "src/app.py",
+     "line": 4, "end_line": 4, "category": "maintainability", "subcategory": ["code_smell"], "fingerprint": "q1"},
+    {"tool": "sonarqube", "rule": "python:S1192", "severity": "warning", "tool_severity": "MEDIUM",
+     "message": "Define a constant instead of duplicating this literal", "language": "Python",
+     "file": "src/other.py", "line": 1, "end_line": 1, "category": "maintainability",
+     "subcategory": ["code_smell"], "fingerprint": "q2"},
+    {"tool": "opengrep", "ruleset": "opengrep-rules", "rule": "python.pass-body-fn", "severity": "note",
+     "tool_severity": "INFO", "message": "Empty function body", "language": "Python", "file": "tests/test_app.py",
+     "line": 4, "end_line": 4, "category": "Best-Practice", "fingerprint": "q3"},
+    {"tool": "opengrep", "ruleset": "opengrep-rules", "rule": "python.custom-rule", "severity": "warning",
+     "tool_severity": "WARNING", "message": "Custom rule without metadata", "language": "Python",
+     "file": "src/app.py", "line": 3, "end_line": 3, "fingerprint": "q4"},
+    {"tool": "sonarqube", "rule": "python:S5852", "severity": "warning", "tool_severity": "MEDIUM",
+     "message": "Make sure the regex used here cannot lead to denial of service", "language": "Python",
+     "file": "src/app.py", "line": 1, "end_line": 1, "category": "reliability", "subcategory": ["bug"],
+     "fingerprint": "q5"},
+    {"tool": "opengrep", "ruleset": "opengrep-rules", "rule": "python.useless-eqeq", "severity": "note",
+     "tool_severity": "INFO", "message": "Useless comparison", "language": "Python", "file": "src/other.py",
+     "line": 1, "end_line": 1, "category": "Correctness", "fingerprint": "q6"},
+]
+
+
+def add_quality_findings(run: Path) -> None:
+    """Add QUALITY_FINDINGS to the findings of step 3."""
+    path = run / "step3-static-analysis" / "findings.json"
+    path.write_text(json.dumps(json.loads(path.read_text()) + QUALITY_FINDINGS, indent=2))
 
 
 def make_run(tmp_path: Path, *, steps: tuple[int, ...] = (2, 3, 4, 5)) -> Path:
@@ -150,7 +189,7 @@ def make_run(tmp_path: Path, *, steps: tuple[int, ...] = (2, 3, 4, 5)) -> Path:
 class FakeOllama:
     """Answers /v1/systemone and /api/chat like Ollama; records which models are loaded at the same time."""
 
-    def __init__(self, installed: tuple[str, ...] = (DECISION_MODEL, REPORT_MODEL)):
+    def __init__(self, installed: tuple[str, ...] = INSTALLED):
         self.installed = list(installed)
         self.loaded: list[str] = []
         self.most_loaded = 0

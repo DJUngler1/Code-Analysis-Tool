@@ -84,10 +84,28 @@ def test_failed_request_is_split_and_unanswered_items_get_the_default_label():
 def test_ollama_stopping_raises_after_failures_in_a_row():
     fake = FakeOllama()
     fake.fail.add("/v1/systemone")
-    client = FakeClient(fake, retries=0, max_failures=3)
+    client = FakeClient(fake, max_failures=3)
     with pytest.raises(OllamaUnavailable, match="3 requests in a row"):
-        decide_area(client, DecisionConfig(max_questions=8), area_with(static_items(8)), out=lambda text: None)
-    assert len(fake.requests) == 3  # 8 questions, then 4, then 2: then it stops
+        decide_area(client, DecisionConfig(max_questions=8, retries=0), area_with(static_items(8)),
+                    out=lambda text: None)
+    assert len(fake.requests) == 3  # a request, then a half of it, then a half of that: then it stops
+
+
+def test_the_decision_models_own_time_limit_retries_and_keep_alive():
+    fake = FakeOllama()
+    fake.fail.add("/v1/systemone")
+    timeouts = []
+
+    def post(endpoint, body, timeout):
+        timeouts.append(timeout)
+        return fake.post(endpoint, body, timeout)
+
+    client = OllamaClient("http://x", post=post, pause=0.0, retries=5, timeout=900, keep_alive="10m",
+                          max_failures=10)
+    config = DecisionConfig(retries=1, timeout_seconds=30, keep_alive="1m")
+    decide_area(client, config, area_with(static_items(1)), out=lambda text: None)
+    assert timeouts == [30, 30]  # one item: asked 1 + retries times, with the model's time limit
+    assert {body["keep_alive"] for _, body in fake.requests} == {"1m"}
 
 
 def test_rejected_requests_do_not_count_as_ollama_stopping():

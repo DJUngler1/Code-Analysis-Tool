@@ -2,14 +2,19 @@
 
 Every item has an id, a kind and the facts the models see (`data`). Python
 decides what is deterministic:
-- security: every finding of steps 3 and 4 gets an id (S-0001, D-0001).
+- security: the findings of step 4 and those of step 3 whose tool category
+  is security, correctness (bugs, OpenGrep) or reliability (bugs, SonarQube),
+  or that have no category, get an id (S-0001 = the first finding of step 3's
+  findings.json, D-0001). Bugs can have security consequences: better rated
+  too high than overlooked.
   Duplicates are grouped: static findings at overlapping lines of the same
   file with the same rule or a shared CWE (also across tools); dependency
   findings of the same package with the same advisory (its id or an alias)
   and the same or an unknown version. One finding per group is the canonical
   one; the others get the label DUPLICATE without asking the model.
-- code quality: lint findings repeat, so they are grouped by tool, rule and
-  scope (L-001), after removing exact duplicates. The model labels groups.
+- code quality: the lint findings of step 2 and the other findings of step 3
+  (maintainability, best-practice, portability, performance, ...). They repeat, so they are grouped by tool, rule and scope (L-001),
+  after removing exact duplicates. The model labels groups.
 - test quality: groups of failed tests with the same cause (T-001), weakly
   tested files (F-0001) and surviving mutants (M-0001).
 The scope of a file (main, test, generated, vendored, docs/examples, ci,
@@ -26,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from scheduler.dependencies.model import SEVERITIES as DEPENDENCY_SEVERITIES
+from scheduler.evaluation.config import InputConfig
 from scheduler.testing.sources import OTHER_FOLDERS, TEST_FOLDERS
 
 LINT_DIR = "step2-linting"
@@ -34,17 +40,10 @@ DEPENDENCIES_DIR = "step4-dependencies"
 TESTS_DIR = "step5-tests"
 EVALUATION_DIR = "step6-llm-evaluation"
 
-MESSAGE_CHARS = 300
-SNIPPET_CHARS = 400
-SNIPPET_CONTEXT_LINES = 2
-MAX_SOURCE_BYTES = 2_000_000
-LINT_SAMPLES = 5
-LINT_SAMPLES_WITH_CODE = 3
-LINT_MESSAGES = 3
-FAILURE_SAMPLES = 5
-FAILURE_MESSAGE_CHARS = 600
-WEAK_LINE_RATE = 0.5
-DECLARATION_CHARS = 300
+# The limits of what the models see are in InputConfig ([llm.input] in code-analysis.toml).
+MAX_SOURCE_BYTES = 2_000_000  # larger source files are not read for code excerpts
+GROUP_MESSAGE_CHARS = 200  # each message of a group of findings
+TEST_NAME_CHARS = 200  # each test name of a group of failed tests
 
 VENDORED_FOLDERS = {"vendor", "vendored", "third_party", "thirdparty", "third-party", "external", "extern",
                     "node_modules", "bower_components"}
@@ -56,6 +55,9 @@ _TEST_NAME = re.compile(r"(\.(test|spec|tests|specs)\.[^.]+$)|(^test_.*\.py$)|(_
 _DECLARATION = re.compile(r"^\s*(export\s+|public\s+|protected\s+|private\s+|internal\s+|static\s+|abstract\s+"
                           r"|final\s+|async\s+|pub(\([^)]*\))?\s+|default\s+)*"
                           r"(class|interface|record|enum|struct|trait|impl|def|fn|function|module|namespace)\b")
+# Categories of step 3 evaluated as security; a finding without a category is, too.
+# correctness (OpenGrep) and reliability (SonarQube) are bugs, which can have security consequences.
+SECURITY_CATEGORIES = ("security", "correctness", "reliability")
 SEVERITY_RANK = {"critical": 5, "high": 4, "error": 4, "medium": 3, "warning": 3, "low": 2, "note": 2,
                  "info": 1, "unknown": 1}
 
@@ -101,8 +103,9 @@ def project_of(run_dir: Path) -> Path | None:
 class SourceReader:
     """Short excerpts of the project's files, for the models to see the code."""
 
-    def __init__(self, project: Path | None):
+    def __init__(self, project: Path | None, limits: InputConfig = InputConfig()):
         self.project = project.resolve() if project and project.is_dir() else None
+        self.limits = limits
         self._lines: dict[str, list[str] | None] = {}
 
     def lines(self, file: str | None) -> list[str] | None:
@@ -123,9 +126,10 @@ class SourceReader:
         if not lines or not line or line < 1 or line > len(lines):
             return None
         last = min(max(end_line or line, line), line + 4)
-        start, stop = max(1, line - SNIPPET_CONTEXT_LINES), min(len(lines), last + SNIPPET_CONTEXT_LINES)
+        context = self.limits.code_context_lines
+        start, stop = max(1, line - context), min(len(lines), last + context)
         text = "\n".join(f"{number}: {lines[number - 1].rstrip()}" for number in range(start, stop + 1))
-        return clip(text, SNIPPET_CHARS)
+        return clip(text, self.limits.code_chars)
 
     def declarations(self, file: str) -> str | None:
         """The file's classes and functions, so the model sees what it does."""
@@ -133,7 +137,7 @@ class SourceReader:
         if not lines:
             return None
         found = [line.strip() for line in lines if _DECLARATION.match(line)]
-        return clip("\n".join(found), DECLARATION_CHARS) if found else None
+        return clip("\n".join(found), self.limits.declaration_chars) if found else None
 
 
 def clip(text: str | None, limit: int) -> str | None:
@@ -173,6 +177,12 @@ def highest(severities: Iterable[str | None]) -> str | None:
     return max(known, key=lambda severity: SEVERITY_RANK.get(severity, 0)) if known else None
 
 
+def is_security(finding: dict) -> bool:
+    """A finding of step 3 is evaluated as security if its tool's category is in SECURITY_CATEGORIES or missing."""
+    category = str(finding.get("category") or "").strip().lower()
+    return category in ("", *SECURITY_CATEGORIES)
+
+
 def tool_facts(summary: dict) -> list[dict]:
     facts = []
     for tool in summary.get("tools", []):
@@ -190,7 +200,7 @@ def tool_facts(summary: dict) -> list[dict]:
 # --- security: steps 3 and 4 ---
 
 
-def security_items(run_dir: Path, reader: SourceReader) -> AreaItems:
+def security_items(run_dir: Path, reader: SourceReader, limits: InputConfig = InputConfig()) -> AreaItems:
     area = AreaItems("security")
     static_summary = read_json(run_dir / STATIC_DIR / "summary.json", None)
     dependency_summary = read_json(run_dir / DEPENDENCIES_DIR / "summary.json", None)
@@ -203,10 +213,11 @@ def security_items(run_dir: Path, reader: SourceReader) -> AreaItems:
         area.notes.append("Step 3 (static code analysis) did not run.")
     else:
         findings = read_json(run_dir / STATIC_DIR / "findings.json", [])
-        _static_items(area, findings, reader, generated)
+        _static_items(area, findings, reader, generated, limits)
         area.facts["static_tools"] = tool_facts(static_summary)
         area.facts["static_complete"] = static_summary.get("complete")
         area.facts["static_findings"] = len(findings)
+        area.facts["static_in_code_quality"] = sum(1 for finding in findings if not is_security(finding))
         area.facts["rulesets"] = sorted({f"{ruleset.get('name')} ({str(ruleset.get('commit', ''))[:7]})"
                                          for tool in static_summary.get("tools", [])
                                          for ruleset in tool.get("rulesets", []) if ruleset.get("name")})
@@ -214,7 +225,7 @@ def security_items(run_dir: Path, reader: SourceReader) -> AreaItems:
         area.notes.append("Step 4 (dependencies) did not run.")
     else:
         findings = read_json(run_dir / DEPENDENCIES_DIR / "findings.json", [])
-        _dependency_items(area, findings)
+        _dependency_items(area, findings, limits)
         area.facts["dependency_tools"] = tool_facts(dependency_summary)
         area.facts["dependency_complete"] = dependency_summary.get("complete")
         area.facts["dependency_findings"] = len(findings)
@@ -235,10 +246,13 @@ def _cwe_ids(cwe: Iterable[str]) -> set[str]:
     return {match.group(0).upper() for text in cwe for match in [re.match(r"CWE-\d+", text, re.IGNORECASE)] if match}
 
 
-def _static_items(area: AreaItems, findings: list[dict], reader: SourceReader, generated: set[str]) -> None:
+def _static_items(area: AreaItems, findings: list[dict], reader: SourceReader, generated: set[str],
+                  limits: InputConfig) -> None:
+    """The security findings of step 3; the ids count all findings, so S-0005 is the fifth of findings.json."""
     ids = [f"S-{index + 1:04d}" for index in range(len(findings))]
-    groups = _union_static(findings)
-    for members in groups:
+    chosen = [index for index, finding in enumerate(findings) if is_security(finding)]
+    for group in _union_static([findings[index] for index in chosen]):
+        members = [chosen[position] for position in group]
         canonical = max(members, key=lambda index: _static_precision(findings[index], index))
         finding = findings[canonical]
         duplicates = [index for index in members if index != canonical]
@@ -255,7 +269,7 @@ def _static_items(area: AreaItems, findings: list[dict], reader: SourceReader, g
             "subcategory": finding.get("subcategory") or None,
             "cwe": sorted(_cwe_ids(finding.get("cwe") or [])) or None,
             "confidence": finding.get("confidence"),
-            "message": clip(finding.get("message"), MESSAGE_CHARS),
+            "message": clip(finding.get("message"), limits.message_chars),
             "file": finding.get("file"),
             "line": finding.get("line"),
             "scope": path_scope(finding.get("file"), generated),
@@ -306,7 +320,7 @@ def _static_precision(finding: dict, index: int) -> tuple:
     return (bool(finding.get("cwe")), "vuln" in (finding.get("subcategory") or []), -span, -index)
 
 
-def _dependency_items(area: AreaItems, findings: list[dict]) -> None:
+def _dependency_items(area: AreaItems, findings: list[dict], limits: InputConfig) -> None:
     ids = [f"D-{index + 1:04d}" for index in range(len(findings))]
     for members in _union_dependencies(findings):
         canonical = max(members, key=lambda index: _dependency_precision(findings[index], index))
@@ -328,7 +342,7 @@ def _dependency_items(area: AreaItems, findings: list[dict]) -> None:
             "severity": min(severities, key=lambda severity: DEPENDENCY_SEVERITIES.index(severity)
                             if severity in DEPENDENCY_SEVERITIES else len(DEPENDENCY_SEVERITIES)),
             "cvss_score": finding.get("cvss_score"),
-            "summary": clip(finding.get("summary"), MESSAGE_CHARS),
+            "summary": clip(finding.get("summary"), limits.message_chars),
             "fixed_versions": sorted({version for index in members
                                       for version in findings[index].get("fixed_versions") or []}),
             "manifests": sorted({findings[index].get("manifest") for index in members if findings[index].get("manifest")}),
@@ -371,59 +385,83 @@ def _dependency_precision(finding: dict, index: int) -> tuple:
             finding.get("cvss_score") is not None, len(finding.get("fixed_versions") or []), -index)
 
 
-# --- code quality: step 2 ---
+# --- code quality: step 2 and the other findings of step 3 ---
 
 
-def lint_items(run_dir: Path, reader: SourceReader) -> AreaItems:
+def code_quality_items(run_dir: Path, reader: SourceReader, limits: InputConfig = InputConfig()) -> AreaItems:
     area = AreaItems("code_quality")
-    summary = read_json(run_dir / LINT_DIR / "summary.json", None)
-    if summary is None:
+    lint_summary = read_json(run_dir / LINT_DIR / "summary.json", None)
+    static_summary = read_json(run_dir / STATIC_DIR / "summary.json", None)
+    if lint_summary is None and static_summary is None:
         area.available = False
-        area.notes.append("Step 2 did not run: no results to evaluate.")
+        area.notes.append("Steps 2 and 3 did not run: no results to evaluate.")
         return area
     generated = generated_files(run_dir)
-    findings = read_json(run_dir / LINT_DIR / "findings.json", [])
-    unique: dict[tuple, dict] = {}
-    for finding in findings:
-        key = tuple(finding.get(name) for name in ("tool", "rule", "file", "line", "column", "message"))
-        unique.setdefault(key, finding)
+    lint_findings: list[dict] = []
+    static_findings: list[dict] = []
+    if lint_summary is None:
+        area.notes.append("Step 2 (linters and formatters) did not run.")
+    else:
+        lint_findings = read_json(run_dir / LINT_DIR / "findings.json", [])
+    if static_summary is None:
+        area.notes.append("Step 3 (static code analysis) did not run.")
+    else:
+        static_findings = [finding for finding in read_json(run_dir / STATIC_DIR / "findings.json", [])
+                           if not is_security(finding)]
+    unique: dict[tuple, tuple[str, dict]] = {}
+    for source, findings in (("lint", lint_findings), ("static", static_findings)):
+        for finding in findings:
+            key = (source, *(finding.get(name) for name in ("tool", "rule", "file", "line", "column", "message")))
+            unique.setdefault(key, (source, finding))
     groups: dict[tuple, list[dict]] = defaultdict(list)
-    for finding in unique.values():
-        groups[(finding.get("tool"), finding.get("rule"), path_scope(finding.get("file"), generated))].append(finding)
+    for source, finding in unique.values():
+        scope = path_scope(finding.get("file"), generated)
+        groups[(source, finding.get("tool"), finding.get("rule"), scope)].append(finding)
     scope_order = ["main", "scripts", "ci", "test", "docs/examples", "vendored", "generated", "unknown"]
-    ordered = sorted(groups.items(), key=lambda entry: (scope_order.index(entry[0][2]), -len(entry[1]),
-                                                        str(entry[0][0]), str(entry[0][1])))
-    for number, ((tool, rule, scope), members) in enumerate(ordered, start=1):
-        samples = _spread_samples(members, LINT_SAMPLES)
-        messages = list(dict.fromkeys(clip(member.get("message"), 200) for member in members))
+    ordered = sorted(groups.items(), key=lambda entry: (scope_order.index(entry[0][3]), -len(entry[1]),
+                                                        str(entry[0][1]), str(entry[0][2])))
+    for number, ((source, tool, rule, scope), members) in enumerate(ordered, start=1):
+        samples = _spread_samples(members, limits.group_samples)
+        messages = list(dict.fromkeys(clip(member.get("message"), GROUP_MESSAGE_CHARS) for member in members))
+        static = source == "static"
         data = {
-            "kind": "group of lint findings",
+            "kind": "group of static analysis findings" if static else "group of lint findings",
             "language": members[0].get("language"),
             "tool": tool,
             "rule": rule,
+            # The tool's own classification (step 3 only): maintainability, reliability, correctness, ...
+            "category": members[0].get("category") if static else None,
+            "subcategory": (members[0].get("subcategory") or None) if static else None,
             "scope": scope,
             "count": len(members),
             "files": len({member.get("file") for member in members}),
             "severity": highest(member.get("severity") for member in members),
-            "fixed_by_the_tool": sum(1 for member in members if member.get("fixed")),
-            "messages": messages[:LINT_MESSAGES],
+            "fixed_by_the_tool": None if static else sum(1 for member in members if member.get("fixed")),
+            "messages": messages[:limits.group_messages],
             "samples": [_compact({"file": sample.get("file"), "line": sample.get("line"),
                                   "code": reader.snippet(sample.get("file"), sample.get("line"))
-                                  if position < LINT_SAMPLES_WITH_CODE else None})
+                                  if position < limits.group_samples_with_code else None})
                         for position, sample in enumerate(samples)],
         }
-        area.items.append({"id": f"L-{number:03d}", "kind": "lint_group", "data": _compact(data)})
+        area.items.append({"id": f"L-{number:03d}", "kind": "static_group" if static else "lint_group",
+                           "data": _compact(data)})
+    lint_tools = tool_facts(lint_summary) if lint_summary else []
+    static_tools = tool_facts(static_summary) if static_summary else []
     area.facts = {
-        "tools": tool_facts(summary),
-        "complete": summary.get("complete"),
-        "input_findings": len(findings),
-        "exact_duplicates": len(findings) - len(unique),
-        "changed_files": summary.get("changed_files", []),
-        "created_files": summary.get("created_files", []),
+        "tools": lint_tools + static_tools,
+        "complete": all(summary.get("complete") for summary in (lint_summary, static_summary) if summary),
+        "input_findings": len(lint_findings) + len(static_findings),
+        "lint_findings": len(lint_findings),
+        "static_findings": len(static_findings),
+        "exact_duplicates": len(lint_findings) + len(static_findings) - len(unique),
+        "changed_files": (lint_summary or {}).get("changed_files", []),
+        "created_files": (lint_summary or {}).get("created_files", []),
     }
     area.context = {
-        "tools": [f"{tool['name']} {tool.get('version') or ''} for {tool.get('language')} ({tool['status']})"
-                  for tool in area.facts["tools"]],
+        "linters_and_formatters": [f"{tool['name']} {tool.get('version') or ''} for {tool.get('language')} "
+                                   f"({tool['status']})" for tool in lint_tools],
+        "static_analysis": [f"{tool['name']} {tool.get('version') or ''} ({tool['status']})".replace("  ", " ")
+                            for tool in static_tools],
         "files_changed_by_the_tools": len(area.facts["changed_files"]),
         "generated_files_left_out": len(generated),
     }
@@ -445,7 +483,7 @@ def _spread_samples(members: list[dict], count: int) -> list[dict]:
 # --- test quality: step 5 ---
 
 
-def test_items(run_dir: Path, reader: SourceReader) -> AreaItems:
+def test_items(run_dir: Path, reader: SourceReader, limits: InputConfig = InputConfig()) -> AreaItems:
     area = AreaItems("test_quality")
     summary = read_json(run_dir / TESTS_DIR / "summary.json", None)
     if summary is None:
@@ -455,8 +493,8 @@ def test_items(run_dir: Path, reader: SourceReader) -> AreaItems:
     tests = read_json(run_dir / TESTS_DIR / "tests.json", [])
     coverage = read_json(run_dir / TESTS_DIR / "coverage.json", [])
     mutants = read_json(run_dir / TESTS_DIR / "mutants.json", [])
-    _failure_items(area, tests)
-    _weak_file_items(area, coverage, mutants, reader)
+    _failure_items(area, tests, limits)
+    _weak_file_items(area, coverage, mutants, reader, limits)
     _mutant_items(area, mutants)
     tests_section = summary.get("tests", {})
     area.facts = {
@@ -505,7 +543,7 @@ def failure_cause(message: str) -> str:
     return first[:160]
 
 
-def _failure_items(area: AreaItems, tests: list[dict]) -> None:
+def _failure_items(area: AreaItems, tests: list[dict], limits: InputConfig) -> None:
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for test in tests:
         if test.get("outcome") in ("failed", "error"):
@@ -518,14 +556,15 @@ def _failure_items(area: AreaItems, tests: list[dict]) -> None:
             "count": len(members),
             "outcomes": dict(sorted({outcome: sum(1 for m in members if m.get("outcome") == outcome)
                                      for outcome in ("failed", "error")}.items())),
-            "tests": [clip(member.get("id"), 200) for member in members[:FAILURE_SAMPLES]],
-            "message": clip(members[0].get("message"), FAILURE_MESSAGE_CHARS),
+            "tests": [clip(member.get("id"), TEST_NAME_CHARS) for member in members[:limits.failed_tests_per_group]],
+            "message": clip(members[0].get("message"), limits.failure_message_chars),
         }
         area.items.append({"id": f"T-{number:03d}", "kind": "test_failure", "data": _compact(data),
                            "cause": cause, "tests": [member.get("id") for member in members]})
 
 
-def _weak_file_items(area: AreaItems, coverage: list[dict], mutants: list[dict], reader: SourceReader) -> None:
+def _weak_file_items(area: AreaItems, coverage: list[dict], mutants: list[dict], reader: SourceReader,
+                     limits: InputConfig) -> None:
     undetected: dict[tuple, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for mutant in mutants:
         if mutant.get("status") in ("Survived", "NoCoverage"):
@@ -536,7 +575,7 @@ def _weak_file_items(area: AreaItems, coverage: list[dict], mutants: list[dict],
         for file in suite.get("files", []):
             total = file.get("lines_total") or 0
             rate = (file.get("lines_covered") or 0) / total if total else None
-            if total and rate is not None and rate < WEAK_LINE_RATE:
+            if total and rate is not None and rate < limits.weak_line_rate:
                 weak.append({"file": file["file"], "lines_total": total, "lines_covered": file.get("lines_covered"),
                              "line_rate": round(rate, 3), "branches_total": file.get("branches_total"),
                              "branches_covered": file.get("branches_covered"), "loaded_by_tests": True})

@@ -186,13 +186,16 @@ After step 4, the tool finds and runs the project's tests, measures their covera
 ### LLM evaluation and audit (step 6)
 
 After step 5, two local models evaluate the results, as defined in [docs/LLMAudit/README.md](docs/LLMAudit/README.md):
-- **Areas:** security (steps 3 and 4), code quality (step 2), test quality (step 5).
-- **The tool** assigns ids, merges duplicate findings (also across tools), groups the lint findings by tool, rule and scope, and counts.
+- **Areas:**
+  - security: step 4, and the findings of step 3 that OpenGrep or SonarQube classify as security issues or bugs (`security`, `correctness`, `reliability`) or do not classify;
+  - code quality: step 2, and the other findings of step 3 (maintainability, best practice, portability, …);
+  - test quality: step 5.
+- **The tool** assigns ids, merges duplicate findings (also across tools), groups the code quality findings by tool, rule and scope, and counts.
 - **The decision model** (`pplx-decider-flash:latest`) labels every item, e.g. `REAL`, `FALSE_POSITIVE` or `NOISE`. Decisions with low confidence are flagged for review.
 - **The reasoning model** (`qwen3.8:latest`) writes the texts of the reports: titles, descriptions, recommendations, reasons and summaries. It never changes a label.
 - **The audit** (`audit.md`, `audit.json` in the run folder) is built by the tool from the reports.
 
-Both models must be installed in Ollama (`ollama pull <model>`); they are never loaded at the same time. The models and their parameters are set in `[llm]` of [`code-analysis.toml`](code-analysis.toml). To run step 6 again on an earlier run, e.g. after changing a prompt: `bin/code-analysis --evaluate ~/code-analysis-results/<project>/<date_time>Z`.
+Both models must be installed in Ollama (`ollama pull <model>`); they are never loaded at the same time. The models and their parameters are set in `[llm]` of [`code-analysis.toml`](code-analysis.toml): what the models see (`[llm.input]`), each model's settings (`[llm.decision]`, `[llm.report]`, including time limit, repetitions and `think` as `true`/`false` or a level such as `"low"`), and optional settings of the reasoning model per area (`[llm.report.security]`, …). To run step 6 again on an earlier run, e.g. after changing a prompt: `bin/code-analysis --evaluate ~/code-analysis-results/<project>/<date_time>Z`.
 
 | Path | Content |
 |---|---|

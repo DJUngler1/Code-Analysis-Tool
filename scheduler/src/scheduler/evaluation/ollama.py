@@ -5,7 +5,9 @@
   `choice` question gets the most likely option, the probability of each
   option and a confidence. No free text, no generation options.
 - chat(): POST /api/chat with `format` (a JSON schema the answer must follow)
-  and `think` (reasoning models such as qwen3.8).
+  and `think` (reasoning models such as qwen3.8): true, false or a level.
+Time limit, repetitions and keep_alive can be given per request, so each
+model uses its own settings ([llm.decision], [llm.report]).
 - installed(), loaded(), unload(): /api/tags, /api/ps and unloading a model,
   so the decision model and the reasoning model are never loaded together.
 
@@ -70,23 +72,28 @@ class OllamaClient:
 
     # --- requests ---
 
-    def decide(self, model: str, state: str, questions: dict[str, dict], *, retries: int | None = None) -> Exchange:
-        body = {"model": model, "state": state, "questions": questions, "keep_alive": self.keep_alive}
-        return self._exchange("/v1/systemone", body, self.retries if retries is None else retries)
+    def decide(self, model: str, state: str, questions: dict[str, dict], *, retries: int | None = None,
+               timeout: float | None = None, keep_alive: str | None = None) -> Exchange:
+        body = {"model": model, "state": state, "questions": questions,
+                "keep_alive": self.keep_alive if keep_alive is None else keep_alive}
+        return self._exchange("/v1/systemone", body, self.retries if retries is None else retries,
+                              self.timeout if timeout is None else timeout)
 
-    def chat(self, model: str, system: str, user: str, schema: dict, *, options: dict, think: bool) -> Exchange:
+    def chat(self, model: str, system: str, user: str, schema: dict, *, options: dict, think: bool | str,
+             retries: int | None = None, timeout: float | None = None, keep_alive: str | None = None) -> Exchange:
         body = {"model": model, "stream": False, "think": think, "format": schema, "options": options,
-                "keep_alive": self.keep_alive,
+                "keep_alive": self.keep_alive if keep_alive is None else keep_alive,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-        return self._exchange("/api/chat", body, self.retries)
+        return self._exchange("/api/chat", body, self.retries if retries is None else retries,
+                              self.timeout if timeout is None else timeout)
 
-    def _exchange(self, endpoint: str, body: dict, retries: int) -> Exchange:
+    def _exchange(self, endpoint: str, body: dict, retries: int, timeout: float) -> Exchange:
         started = time.monotonic()
         error = None
         rejected = False
         for attempt in range(1, retries + 2):
             try:
-                response = self._post(endpoint, body, self.timeout)
+                response = self._post(endpoint, body, timeout)
                 self._failures_in_a_row = 0
                 return Exchange(endpoint, body, response, round(time.monotonic() - started, 1), attempts=attempt)
             except OllamaError as exc:

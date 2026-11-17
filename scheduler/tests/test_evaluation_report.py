@@ -2,10 +2,10 @@
 
 import json
 
-from evaluation_data import PATCH, FakeClient, FakeOllama, make_run
+from evaluation_data import PATCH, FakeClient, FakeOllama, add_quality_findings, make_run
 
 from scheduler.evaluation.config import ReportConfig
-from scheduler.evaluation.items import SourceReader, lint_items, project_of, security_items, test_items
+from scheduler.evaluation.items import SourceReader, code_quality_items, project_of, security_items, test_items
 from scheduler.evaluation.report import (TextWriter, build_report, patch_example, patch_sample, patch_stats,
                                          validate_summary, validate_texts, write_texts)
 
@@ -44,7 +44,7 @@ def test_security_report_keeps_every_finding_exactly_once(tmp_path):
 
 def test_lint_report_statistics_and_patch(tmp_path):
     run = make_run(tmp_path)
-    area = lint_items(run, SourceReader(project_of(run)))
+    area = code_quality_items(run, SourceReader(project_of(run)))
     noise = next(item["id"] for item in area.items if item["data"]["rule"] == "E501")
     report = build_report(area, decisions_for(area, {noise: "NOISE"}), run).report
     stats = report["statistics"]
@@ -61,6 +61,24 @@ def test_lint_report_statistics_and_patch(tmp_path):
     assert changes["example"]["diff"].splitlines()[0] == "@@ -1,3 +1,3 @@"
     assert report["excluded_files"] == {"total": 1, "groups": [
         {"reason_or_pattern": "generated: header comment", "count": 1, "examples": ["src/gen.py"]}]}
+
+
+def test_static_findings_in_the_reports(tmp_path):
+    run = make_run(tmp_path)
+    add_quality_findings(run)
+    reader = SourceReader(project_of(run))
+    security_area = security_items(run, reader)
+    security = build_report(security_area, decisions_for(security_area), run).report
+    assert security["statistics"]["input_findings"] == 9  # 6 of step 3, 3 of step 4
+    assert security["statistics"]["static_findings_in_code_quality"] == 3
+    quality_area = code_quality_items(run, reader)
+    draft = build_report(quality_area, decisions_for(quality_area), run)
+    stats = draft.report["statistics"]
+    assert (stats["input_findings"], stats["lint_findings"], stats["static_findings"]) == (8, 5, 3)
+    smell = next(group for group in draft.report["groups"] if group["rule_id"] == "python:S1192")
+    assert smell["category"] == "maintainability" and smell["count"] == 2
+    assert {"id": smell["group_id"], "tool": "sonarqube", "rule": "python:S1192", "category": "maintainability",
+            "scope": "main", "count": 2} in draft.facts["real_groups"]
 
 
 def test_patch_helpers():
@@ -166,7 +184,7 @@ def test_invalid_answer_of_a_batch_is_split(tmp_path):
 
 def test_summary_facts_are_shortened_to_fit_the_context(tmp_path):
     run = make_run(tmp_path)
-    area = lint_items(run, SourceReader(project_of(run)))
+    area = code_quality_items(run, SourceReader(project_of(run)))
     draft = build_report(area, decisions_for(area), run)
     draft.facts["real_groups"] = [{"id": f"G-{index:03d}", "rule": "x" * 50} for index in range(2000)]
     fake = FakeOllama()

@@ -1,7 +1,9 @@
 """Step 6 of the workflow: evaluate the results of steps 2 to 5 with local LLMs, then write the final audit.
 
-Three areas: security (steps 3 and 4), code quality (step 2), test quality
-(step 5). For each area listed in code-analysis.toml ([llm] areas) whose steps ran:
+Three areas: security (step 4 and the findings of step 3 whose tool category
+is security, correctness or reliability, or missing), code quality (step 2 and
+the other findings of step 3), test quality (step 5). For each area listed in code-analysis.toml
+([llm] areas) whose steps ran:
 1. Python prepares the items: ids, duplicates, groups, code context (items.py).
 2. The decision model labels every item (decide.py). Then it is unloaded.
 3. Python builds the report, the reasoning model writes its texts (report.py).
@@ -30,17 +32,17 @@ from pathlib import Path
 
 from scheduler.config import Settings
 from scheduler.evaluation.audit import AUDIT_JSON, AUDIT_MD, write_audit
-from scheduler.evaluation.config import AREAS, ConfigError, LlmConfig, load_config
+from scheduler.evaluation.config import AREAS, ConfigError, InputConfig, LlmConfig, load_config
 from scheduler.evaluation.decide import DecisionStats, decide_area
-from scheduler.evaluation.items import (EVALUATION_DIR, AreaItems, SourceReader, lint_items, project_of,
+from scheduler.evaluation.items import (EVALUATION_DIR, AreaItems, SourceReader, code_quality_items, project_of,
                                         security_items, test_items)
 from scheduler.evaluation.ollama import Exchange, OllamaClient, OllamaError, model_key
 from scheduler.evaluation.report import ReportStats, TextWriter, build_report, write_texts
 from scheduler.linting.model import Status
 
 STEP_DIR = EVALUATION_DIR
-AREA_ITEMS: dict[str, Callable[[Path, SourceReader], AreaItems]] = {
-    "security": security_items, "code_quality": lint_items, "test_quality": test_items}
+AREA_ITEMS: dict[str, Callable[[Path, SourceReader, InputConfig], AreaItems]] = {
+    "security": security_items, "code_quality": code_quality_items, "test_quality": test_items}
 AREA_NAMES = {"security": "security", "code_quality": "code quality", "test_quality": "test quality"}
 
 
@@ -118,8 +120,8 @@ def run_evaluation(
     if config is not None:
         prepared = _prepare(run_dir, step_dir, config, project, result, out)
     if config is not None and prepared:
-        client = client or OllamaClient(settings.ollama_base_url, timeout=config.timeout_seconds,
-                                        retries=config.retries, keep_alive=config.keep_alive)
+        # Time limit, repetitions and keep_alive come with each request, from the model's own settings.
+        client = client or OllamaClient(settings.ollama_base_url)
         try:
             _check_models(client, config, result)
             if not result.errors:
@@ -150,7 +152,7 @@ def run_evaluation(
 
 def _prepare(run_dir: Path, step_dir: Path, config: LlmConfig, project: Path | None, result: EvaluationResult,
              out: Callable[[str], None]) -> list[tuple[AreaRun, AreaItems]]:
-    reader = SourceReader(project)
+    reader = SourceReader(project, config.input)
     prepared = []
     for name in AREAS:
         run = AreaRun(name)
@@ -160,7 +162,7 @@ def _prepare(run_dir: Path, step_dir: Path, config: LlmConfig, project: Path | N
             out(f"  {AREA_NAMES[name]:<14} skipped: not in [llm] areas of code-analysis.toml")
             continue
         try:
-            items = AREA_ITEMS[name](run_dir, reader)
+            items = AREA_ITEMS[name](run_dir, reader, config.input)
         except Exception as exc:  # noqa: BLE001 – reported like a failed tool, the other areas go on
             (step_dir / f"internal-error-{name}.txt").write_text(traceback.format_exc(), encoding="utf-8")
             run.status = Status.FAILED
@@ -186,6 +188,7 @@ def describe_items(items: AreaItems) -> str:
     names = {"static": ("static finding", "static findings"),
              "dependency": ("dependency finding", "dependency findings"),
              "lint_group": ("group of lint findings", "groups of lint findings"),
+             "static_group": ("group of static analysis findings", "groups of static analysis findings"),
              "test_failure": ("group of failed tests", "groups of failed tests"),
              "weak_file": ("weakly tested file", "weakly tested files"),
              "mutant": ("surviving mutant", "surviving mutants")}
@@ -236,9 +239,10 @@ def _evaluate(client: OllamaClient, config: LlmConfig, prepared: list[tuple[Area
     out(f"\n  Writing the reports with {config.report.model} (reasoning model) ...")
     try:
         for run, items in prepared:
-            draft = build_report(items, decisions[run.area], run_dir)
-            writer = TextWriter(client, config.report, area=run.area, language=config.report_language,
-                                retries=config.retries, log=logs[run.area].writer("report"), out=out)
+            report_config = config.report_for(run.area)  # [llm.report] with the area's own values
+            draft = build_report(items, decisions[run.area], run_dir, config.input)
+            writer = TextWriter(client, report_config, area=run.area, language=config.report_language,
+                                retries=report_config.retries, log=logs[run.area].writer("report"), out=out)
             try:
                 write_texts(draft, writer)
             finally:  # also when Ollama stops answering: the report is written with the texts so far

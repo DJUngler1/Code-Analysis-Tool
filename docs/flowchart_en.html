@@ -32,6 +32,9 @@
 .tp-n.io { border-radius: 999px; text-align: center; padding: 9px; border-color: #6B6A65; }
 .tp-ar { text-align: center; color: var(--tp-hint); font-size: 18px; line-height: 1; padding: 4px 0; }
 .tp-ph.llm .tp-n { background: #2B2950; border-color: #3C3489; }
+.tp-ph.llm .tp-n.d { background: var(--tp-dec-bg); border: 0.5px dashed var(--tp-dec-border); }
+.tp-gap { margin-bottom: 8px; }
+.tp .tp-note { margin-top: 8px; font-size: 12px; color: var(--tp-muted); }
 .tp-col { display: flex; flex-direction: column; gap: 6px; }
 </style>
 <style>html,body{margin:0;background:#1A1A19;} .tp{margin:0 auto;border-radius:0;}</style>
@@ -72,6 +75,7 @@
     <div class="tp-n"><b>OpenGrep</b><span>Vulnerabilities, taint across functions within a file (XSS, injection) · comparison with CodeQL, possibly switch to CodeQL / SonarQube Enterprise</span></div>
     <div class="tp-n"><b>SonarQube Community</b><span>Simple vulns, code smells, bugs, duplicates</span></div>
   </div>
+  <p class="tp-note">Every finding keeps its tool's category: security, maintainability, reliability, correctness, best practice, …</p>
 </div>
 <div class="tp-ar">↓</div>
 
@@ -105,9 +109,10 @@
 
 <div class="tp-ph llm">
   <p class="tp-pt">6 · LLM evaluation via Ollama (local or cloud models, check costs)</p>
+  <div class="tp-n d tp-gap"><b>Static finding (step 3): security issue or bug, or no category?</b><span>The tool's own category · security, correctness, reliability or none → Security · others (maintainability, best practice, portability, …) → Code quality</span></div>
   <div class="tp-row">
-    <div class="tp-n"><b>Security</b><span>Merge OpenGrep, SonarQube, OSV, package manager audit · filter duplicates, noise, false positives · classify, suggest actions</span></div>
-    <div class="tp-n"><b>Code quality</b><span>Summarize and filter linter/formatter results · check naming · assess project structure</span></div>
+    <div class="tp-n"><b>Security</b><span>Merge OSV, package manager audit and the OpenGrep / SonarQube security and bug findings · filter duplicates, noise, false positives · classify, suggest actions</span></div>
+    <div class="tp-n"><b>Code quality</b><span>Summarize and filter linter/formatter results and the other OpenGrep / SonarQube findings, grouped by rule · check naming · assess project structure</span></div>
     <div class="tp-n"><b>Test quality</b><span>Do the tests work? · interpret mutation results · compare tests vs. code · untested parts: critical or non-critical?</span></div>
   </div>
 </div>

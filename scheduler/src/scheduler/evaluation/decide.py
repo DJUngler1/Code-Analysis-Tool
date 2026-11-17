@@ -30,6 +30,7 @@ PROMPTS = {
     "static": "security_decision",
     "dependency": "security_decision",
     "lint_group": "lint_decision",
+    "static_group": "lint_decision",
     "test_failure": "test_failure_decision",
     "weak_file": "test_file_decision",
     "mutant": "test_mutant_decision",
@@ -119,7 +120,9 @@ def decide_area(client: OllamaClient, config: DecisionConfig, area: AreaItems, *
 def _decide(client: OllamaClient, config: DecisionConfig, batch: Batch, decisions: dict[str, dict],
             stats: DecisionStats, log: Callable[[Exchange], None]) -> None:
     single = len(batch.questions) == 1
-    exchange = client.decide(config.model, batch.state, batch.questions, retries=None if single else 0)
+    # A request with several items is split instead of repeated; a single item is repeated `retries` times.
+    exchange = client.decide(config.model, batch.state, batch.questions, retries=config.retries if single else 0,
+                             timeout=config.timeout_seconds, keep_alive=config.keep_alive)
     stats.requests += 1
     stats.duration_seconds += exchange.duration_seconds
     log(exchange)

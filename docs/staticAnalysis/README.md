@@ -61,7 +61,7 @@ OpenGrep ships no rules. The rule sets are defined in `[opengrep.rulesets.<name>
 | `semgrep-rules` | [semgrep/semgrep-rules](https://github.com/semgrep/semgrep-rules) | C, C#, Java, JavaScript, TypeScript, Python, Rust | Semgrep Rules License v1.0 |
 | `0xdea-semgrep-rules` | [0xdea/semgrep-rules](https://github.com/0xdea/semgrep-rules) | C, C++ | MIT |
 
-- **All rules of a folder run,** without a filter on the category. Every finding keeps the rule's category, subcategory, CWE, OWASP, confidence, likelihood and impact.
+- **All rules of a folder run,** without a filter on the category. Every finding keeps the rule's category, subcategory, CWE, OWASP, confidence, likelihood and impact. Step 6 uses the category to divide the findings: `security`, `correctness` or none goes to the security evaluation, every other category (e.g. `best-practice`, `portability`, `performance`) to code quality ([LLM evaluation](../LLMAudit/README.md#1-preparing-the-items)).
 - **C++** is covered only by `0xdea-semgrep-rules`; the C rules of the other two sets apply only to `.c` and `.h` files.
 
 ### Switching and adding rule sets
@@ -152,7 +152,7 @@ The CLI scanner gets its parameters in the run's `sonarqube/sonar-project.proper
 
 - **Issues** come from `api/issues/search` (unresolved ones), security hotspots from `api/hotspots/search` (to review).
 - **Severity:** highest impact severity: `BLOCKER`/`HIGH` → `error`, `MEDIUM` → `warning`, `LOW`/`INFO` → `note`.
-- **Category:** the impact's software quality (`security`, `reliability`, `maintainability`).
+- **Category:** the software quality of the highest impact (`security`, `reliability`, `maintainability`). Step 6 evaluates `security` and `reliability` (bugs) as security and `maintainability` as code quality.
 - **Subcategory:** the issue type (`bug`, `vulnerability`, `code_smell`) or `hotspot`.
 - **CWE and OWASP Top 10 2021** per rule; the rule set is the quality profile.
 
