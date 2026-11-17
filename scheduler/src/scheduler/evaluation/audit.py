@@ -37,6 +37,10 @@ TEXTS = {
         "title_col": "Title", "location": "Location / package", "recommendation": "Recommendation",
         "label": "Label", "reason": "Reason", "real_findings": "REAL findings", "filtered": "Filtered",
         "real_groups": "REAL groups", "tool_rule": "Tool / rule", "scope": "Scope", "findings": "Findings",
+        "where": "Where", "more": "more",
+        "group_locations": "{id} – {rule}: {count} {findings_word} in {files} {files_word}",
+        "finding_words": ("finding", "findings"), "file_words": ("file", "files"),
+        "locations_of_real_groups": "Locations of the REAL groups",
         "formatter_changes": "Formatter changes", "excluded": "Excluded files", "tools": "Tools",
         "files_changed": "files changed", "kinds": "Kinds of change", "example": "Example",
         "count": "Count", "examples": "Examples", "suite": "Suite", "tool": "Tool",
@@ -76,6 +80,10 @@ TEXTS = {
         "severity": "Schwere", "title_col": "Titel", "location": "Ort / Paket", "recommendation": "Empfehlung",
         "label": "Label", "reason": "Begründung", "real_findings": "REAL-Befunde", "filtered": "Herausgefiltert",
         "real_groups": "REAL-Gruppen", "tool_rule": "Werkzeug / Regel", "scope": "Bereich", "findings": "Befunde",
+        "where": "Wo", "more": "weitere",
+        "group_locations": "{id} – {rule}: {count} {findings_word} in {files} {files_word}",
+        "finding_words": ("Befund", "Befunde"), "file_words": ("Datei", "Dateien"),
+        "locations_of_real_groups": "Fundstellen der REAL-Gruppen",
         "formatter_changes": "Änderungen der Formatter", "excluded": "Ausgeschlossene Dateien",
         "tools": "Werkzeuge", "files_changed": "Dateien geändert", "kinds": "Art der Änderungen",
         "example": "Beispiel", "count": "Anzahl", "examples": "Beispiele", "suite": "Suite", "tool": "Werkzeug",
@@ -262,6 +270,25 @@ def tool_rule(group: dict) -> str:
     return f"{text} ({group['category']})" if group.get("category") else text
 
 
+def where(group: dict, t: dict) -> str:
+    """The first location of a code quality group and how many more there are."""
+    locations = [{"file": entry.get("file"), "line": line} for entry in group.get("locations") or []
+                 for line in (entry.get("lines") or [None])]
+    locations = locations or group.get("sample_locations") or []  # reports written before the full list
+    if not locations:
+        return "–"
+    first = locations[0]
+    text = f"{first['file']}:{first['line']}" if first.get("line") else str(first.get("file") or "–")
+    rest = max((group.get("count") or 0) - 1, len(locations) - 1)
+    return f"{text} (+{rest} {t['more']})" if rest else text
+
+
+def location_line(entry: dict) -> str:
+    """One file of a group with its lines, for the list of locations."""
+    lines = ", ".join(str(line) for line in entry.get("lines") or [])
+    return f"- `{entry.get('file') or '–'}`" + (f": {lines}" if lines else "")
+
+
 def render_markdown(audit: dict) -> str:
     t = TEXTS[audit["language"]]
     project = audit.get("project") or "?"
@@ -373,17 +400,27 @@ def _code_quality(area: dict, t: dict) -> list[str]:
     other = [group for group in groups if group["label"] != "REAL"]
     lines += [f"### {t['real_groups']} ({len(real)})", ""]
     if real:
-        lines += table([t["id"], t["severity"], t["tool_rule"], t["scope"], t["findings"], t["title_col"],
+        lines += table([t["id"], t["severity"], t["tool_rule"], t["scope"], t["findings"], t["where"], t["title_col"],
                         t["recommendation"]],
-                       [[group["group_id"], group.get("severity"), tool_rule(group),
-                         group.get("scope"), group.get("count"), group.get("title"), group.get("recommendation")]
+                       [[group["group_id"], group.get("severity"), tool_rule(group), group.get("scope"),
+                         group.get("count"), where(group, t), group.get("title"), group.get("recommendation")]
                         for group in real])
         lines.append("")
+        listed = [group for group in real if group.get("locations")]
+        if listed:
+            lines += [f"#### {t['locations_of_real_groups']}", ""]
+            for group in listed:
+                count, files = group.get("count") or 0, len(group["locations"])
+                summary = t["group_locations"].format(
+                    id=group["group_id"], rule=tool_rule(group), count=count, files=files,
+                    findings_word=t["finding_words"][count != 1], files_word=t["file_words"][files != 1])
+                lines += details(summary, [location_line(entry) for entry in group["locations"]]) + [""]
     if other:
         lines += details(f"{t['filtered']} ({len(other)})",
-                         table([t["id"], t["label"], t["tool_rule"], t["scope"], t["findings"], t["reason"]],
-                               [[group["group_id"], group["label"], tool_rule(group),
-                                 group.get("scope"), group.get("count"), group.get("reason")] for group in other]))
+                         table([t["id"], t["label"], t["tool_rule"], t["scope"], t["findings"], t["where"],
+                                t["reason"]],
+                               [[group["group_id"], group["label"], tool_rule(group), group.get("scope"),
+                                 group.get("count"), where(group, t), group.get("reason")] for group in other]))
         lines.append("")
     changes = report.get("formatter_changes") or {}
     texts = report.get("texts") or {}

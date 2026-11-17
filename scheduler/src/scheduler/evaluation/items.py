@@ -443,8 +443,9 @@ def code_quality_items(run_dir: Path, reader: SourceReader, limits: InputConfig 
                                   if position < limits.group_samples_with_code else None})
                         for position, sample in enumerate(samples)],
         }
+        # Every location of the group, for the report and the audit; the models only see the samples.
         area.items.append({"id": f"L-{number:03d}", "kind": "static_group" if static else "lint_group",
-                           "data": _compact(data)})
+                           "data": _compact(data), "locations": _locations(members)})
     lint_tools = tool_facts(lint_summary) if lint_summary else []
     static_tools = tool_facts(static_summary) if static_summary else []
     area.facts = {
@@ -466,6 +467,13 @@ def code_quality_items(run_dir: Path, reader: SourceReader, limits: InputConfig 
         "generated_files_left_out": len(generated),
     }
     return area
+
+
+def _locations(members: list[dict]) -> list[dict]:
+    """File and line of every finding, sorted by file and line."""
+    found = {(str(member.get("file") or ""), member.get("line")) for member in members}
+    return [{"file": file or None, "line": line}
+            for file, line in sorted(found, key=lambda entry: (entry[0], entry[1] if entry[1] is not None else -1))]
 
 
 def _spread_samples(members: list[dict], count: int) -> list[dict]:

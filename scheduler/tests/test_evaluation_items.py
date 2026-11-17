@@ -140,6 +140,10 @@ def test_lint_groups_by_tool_rule_and_scope(tmp_path):
                            ("biome", "lint/style/useTemplate", "main")}
     unused = groups[("ruff check", "F401", "main")]["data"]
     assert unused["count"] == 2 and unused["files"] == 2  # the exact duplicate is removed
+    # Every location, sorted; not part of what the model sees (data).
+    assert groups[("ruff check", "F401", "main")]["locations"] == [{"file": "src/app.py", "line": 1},
+                                                                    {"file": "src/other.py", "line": 1}]
+    assert "locations" not in unused
     assert area.facts["exact_duplicates"] == 1
     assert groups[("biome", "lint/style/useTemplate", "main")]["data"]["fixed_by_the_tool"] == 1
     assert [item["id"] for item in area.items] == ["L-001", "L-002", "L-003"]

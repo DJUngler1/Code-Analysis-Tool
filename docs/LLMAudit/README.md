@@ -131,7 +131,7 @@ For each area, the tool builds the report and the reasoning model writes its tex
 **Built by the tool:**
 - **Security:** one entry per finding that is not a duplicate (`E-001`), with all merged ids in `source_ids`, tools, rule ids, CWE/CVE/other identifiers, location or package with the fixed versions, severity as the tools report it, label and confidence. Sorted: `REAL` first (by severity), then `FALSE_POSITIVE`, then `NOISE`. Statistics: findings per label, `REAL` per severity, low-confidence decisions. Every input id is in exactly one entry.
 - **Security**, in addition: the number of findings of step 3 that are in the code quality report.
-- **Code quality:** one group per lint or static analysis group (`G-001`) with tool, rule, the tool's category (static analysis only), count, files, severity, sample locations and messages; the findings of step 2 and of step 3 counted separately; formatter changes from `changes.patch` (tools that changed files, files, added and removed lines, the first hunk as an example, at most 10 lines copied verbatim); excluded files grouped by reason.
+- **Code quality:** one group per lint or static analysis group (`G-001`) with tool, rule, the tool's category (static analysis only), count, files, severity, every location (file and lines; the models only see the samples), sample locations and messages; the findings of step 2 and of step 3 counted separately; formatter changes from `changes.patch` (tools that changed files, files, added and removed lines, the first hunk as an example, at most 10 lines copied verbatim); excluded files grouped by reason.
 - **Test quality:** one entry per item (`E-001`): failed tests, weakly tested files, surviving mutants; the test runs, coverage and mutation results of step 5.
 
 **Written by the reasoning model:**
@@ -148,7 +148,7 @@ The tool writes the final audit into the run folder, from the reports alone (no 
   1. Overview: project, commit, date, languages, models, the status of steps 2 to 6.
   2. Key figures: `REAL` security findings by severity, `REAL` lint groups, test results, coverage, mutation score, decisions to review.
   3. Security: summary, the `REAL` findings with their recommendation, the filtered ones with their reason.
-  4. Code quality: summary, the `REAL` groups, the formatter changes with the example, the excluded files.
+  4. Code quality: summary, the `REAL` groups with where they are (the first location and how many more in the table, every file with its lines in a collapsible list per group), the filtered groups with their first location, the formatter changes with the example, the excluded files.
   5. Test quality: summary, test runs, coverage, mutation testing, failed tests caused by the project, critical files with little coverage, test gaps.
   6. Review list: decisions with low confidence and entries with a review hint.
   7. Method and limits: the tools and versions of each area, the models with their settings.
@@ -177,7 +177,7 @@ The folder must be below `OUTPUT_DIR`. An earlier `step6-llm-evaluation/` folder
 |---|---|
 | `audit.md`, `audit.json` | The final audit |
 | `step6-llm-evaluation/summary.json` | Models (name, digest), the settings of `[llm]`, per area: status (`ok`, `partial`, `failed`, `skipped`), items, duplicates, requests, durations, tokens, labels, low-confidence decisions, notes |
-| `step6-llm-evaluation/<area>/items.json` | The prepared items: ids, facts, duplicates, code context |
+| `step6-llm-evaluation/<area>/items.json` | The prepared items: ids, facts, duplicates, code context; for code quality groups every location |
 | `step6-llm-evaluation/<area>/decisions.json` | Per item: label, probabilities, confidence, review flag, who decided (model, default, tool); duplicates with `duplicate_of` |
 | `step6-llm-evaluation/<area>/report.json` | The area's report: structure by the tool, texts by the reasoning model |
 | `step6-llm-evaluation/<area>/requests/` | Every request and answer (`NNN-decision.json`, `NNN-report.json`), including the reasoning of the reasoning model |

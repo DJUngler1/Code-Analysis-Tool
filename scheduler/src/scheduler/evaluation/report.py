@@ -297,6 +297,16 @@ def patch_sample(patch: str, limit: int) -> str:
     return "\n".join(parts)
 
 
+def locations_by_file(locations: list[dict]) -> list[dict]:
+    """[{"file", "line"}, ...] as [{"file", "lines": [...]}, ...], in the order of the files."""
+    by_file: dict[str | None, list[int]] = {}
+    for location in locations:
+        lines = by_file.setdefault(location.get("file"), [])
+        if location.get("line") is not None:
+            lines.append(location["line"])
+    return [{"file": file, "lines": lines} for file, lines in by_file.items()]
+
+
 def excluded_groups(excluded: list[dict]) -> list[dict]:
     groups: dict[str, list[str]] = defaultdict(list)
     for entry in excluded:
@@ -325,6 +335,7 @@ def build_lint(area: AreaItems, decisions: dict[str, dict], run_dir: Path, limit
             "source_ids": [item["id"]],
             "sample_locations": [{"file": sample.get("file"), "line": sample.get("line")}
                                  for sample in data.get("samples", [])][:SAMPLE_LOCATIONS],
+            "locations": locations_by_file(item.get("locations", [])),
             "messages": data.get("messages", []),
             **_decision_fields(decision),
         }))

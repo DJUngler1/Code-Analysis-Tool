@@ -205,6 +205,8 @@ def test_audit_in_german_and_standalone(tmp_path, capsys):
     evaluate(run, settings=settings_for(config))
     text = (run / "audit.md").read_text()
     assert "## 3. Sicherheit" in text and "### REAL-Befunde (3)" in text
+    assert "#### Fundstellen der REAL-Gruppen" in text and "src/app.py:1 (+1 weitere)" in text
+    assert "<summary>G-001 – ruff check / F401: 2 Befunde in 2 Dateien</summary>" in text
     (run / "audit.md").unlink()
     assert audit_main([str(run)]) == 0
     assert (run / "audit.md").read_text() == text
@@ -223,6 +225,13 @@ def test_audit_content(tmp_path):
                      "<summary>Filtered (1)</summary>", "```diff\n@@ -1,3 +1,3 @@",
                      "| Python (requirements.txt) | coverage.py | ok | 60.0% | – |",
                      "| Security | E-004 | NOISE | 0.40 (low confidence) | Title of E-004 | – |",
+                     # Code quality: where the findings are, in the table and as a list per REAL group.
+                     "| G-001 | error | ruff check / F401 | main | 2 | src/app.py:1 (+1 more) | Title of G-001 |",
+                     "#### Locations of the REAL groups",
+                     "<summary>G-001 – ruff check / F401: 2 findings in 2 files</summary>",
+                     "- `src/app.py`: 1\n- `src/other.py`: 1",
+                     "<summary>G-002 – biome / lint/style/useTemplate: 1 finding in 1 file</summary>",
+                     "| G-003 | NOISE | ruff check / E501 | test | 1 | tests/test_app.py:1 | Reason for G-003. |",
                      f"{DECISION_MODEL} (000000000000)"):
         assert expected in text, expected
     audit = read(run / "audit.json")

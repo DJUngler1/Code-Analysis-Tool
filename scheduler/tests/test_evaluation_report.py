@@ -6,8 +6,8 @@ from evaluation_data import PATCH, FakeClient, FakeOllama, add_quality_findings,
 
 from scheduler.evaluation.config import ReportConfig
 from scheduler.evaluation.items import SourceReader, code_quality_items, project_of, security_items, test_items
-from scheduler.evaluation.report import (TextWriter, build_report, patch_example, patch_sample, patch_stats,
-                                         validate_summary, validate_texts, write_texts)
+from scheduler.evaluation.report import (TextWriter, build_report, locations_by_file, patch_example, patch_sample,
+                                         patch_stats, validate_summary, validate_texts, write_texts)
 
 
 def decisions_for(area, labels=None):
@@ -54,6 +54,8 @@ def test_lint_report_statistics_and_patch(tmp_path):
     assert stats["real_findings_by_severity"] == {"error": 2, "note": 1}
     assert [group["group_id"] for group in report["groups"]] == ["G-001", "G-002", "G-003"]
     assert report["groups"][0]["rule_id"] == "F401"  # REAL, highest severity first
+    assert report["groups"][0]["locations"] == [{"file": "src/app.py", "lines": [1]},
+                                                {"file": "src/other.py", "lines": [1]}]
     changes = report["formatter_changes"]
     assert changes["tools"] == ["biome"]
     assert (changes["files_changed"], changes["lines_added"], changes["lines_removed"]) == (1, 2, 2)
@@ -79,6 +81,13 @@ def test_static_findings_in_the_reports(tmp_path):
     assert smell["category"] == "maintainability" and smell["count"] == 2
     assert {"id": smell["group_id"], "tool": "sonarqube", "rule": "python:S1192", "category": "maintainability",
             "scope": "main", "count": 2} in draft.facts["real_groups"]
+
+
+def test_locations_by_file():
+    assert locations_by_file([{"file": "a.py", "line": 3}, {"file": "a.py", "line": 9}, {"file": "b.py", "line": None},
+                              {"file": "c.py", "line": 1}]) == [{"file": "a.py", "lines": [3, 9]},
+                                                                {"file": "b.py", "lines": []},
+                                                                {"file": "c.py", "lines": [1]}]
 
 
 def test_patch_helpers():
