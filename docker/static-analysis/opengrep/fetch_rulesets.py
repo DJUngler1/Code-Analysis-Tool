@@ -1,8 +1,9 @@
-"""Build step of the OpenGrep image: fetch and check the active rule sets of config/opengrep.toml.
+"""Build step of the OpenGrep image: fetch and check the active rule sets of [opengrep] in code-analysis.toml.
 
-Usage: python3 fetch_rulesets.py <opengrep.toml> <target folder>
+Usage: python3 fetch_rulesets.py <opengrep.json> <target folder>
+(the [opengrep] table of code-analysis.toml as JSON, written by the first build stage)
 
-Only the rule sets listed in `[opengrep] rulesets` are fetched. Rule sets that
+Only the rule sets listed in `[opengrep] active` are fetched. Rule sets that
 are merely defined are not downloaded: fetching and loading rules already
 counts as using them, and some licenses (Semgrep Rules License v1.0) must be
 accepted consciously, by activating the rule set and rebuilding the image.
@@ -29,7 +30,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
 
 VERSIONS_FILE = Path("/opt/code-analysis/versions.tsv")
@@ -42,10 +42,10 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
 
 def main(config_path: str, target: str) -> int:
-    config = tomllib.loads(Path(config_path).read_text(encoding="utf-8"))
+    config = json.loads(Path(config_path).read_text(encoding="utf-8"))  # the [opengrep] table
     rulesets = config.get("rulesets") or {}
     if not rulesets:
-        print(f"{config_path}: no [rulesets.<name>] defined", file=sys.stderr)
+        print(f"{config_path}: no [opengrep.rulesets.<name>] defined", file=sys.stderr)
         return 1
     try:
         active = active_rulesets(config)
@@ -70,7 +70,7 @@ def main(config_path: str, target: str) -> int:
             counts = copy_rules(Path(checkout), destination, folders, set(definition.get("exclude", [])))
         rejected = rejected_rules(destination, folders)
         if rejected:
-            print(f"OpenGrep rejects rules of {name}; add them to `exclude` in opengrep.toml:", file=sys.stderr)
+            print(f"OpenGrep rejects rules of {name}; add them to `exclude` in code-analysis.toml:", file=sys.stderr)
             for line in rejected:
                 print(f"  {line}", file=sys.stderr)
             return 1
@@ -92,14 +92,14 @@ def main(config_path: str, target: str) -> int:
 
 
 def active_rulesets(config: dict) -> list[str]:
-    """Names in `[opengrep] rulesets`, without duplicates; each must be defined."""
-    names = (config.get("opengrep") or {}).get("rulesets")
+    """Names in `[opengrep] active`, without duplicates; each must be defined."""
+    names = config.get("active")
     if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
-        raise ValueError("[opengrep] rulesets must list the active rule sets")
+        raise ValueError("[opengrep] active must list the active rule sets")
     defined = config.get("rulesets") or {}
     unknown = [name for name in names if name not in defined]
     if unknown:
-        raise ValueError(f"unknown rule set(s) in [opengrep] rulesets: {', '.join(unknown)}")
+        raise ValueError(f"unknown rule set(s) in [opengrep] active: {', '.join(unknown)}")
     return list(dict.fromkeys(names))
 
 

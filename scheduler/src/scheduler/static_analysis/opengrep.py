@@ -56,7 +56,7 @@ class OpenGrepReport:
 
 def run_opengrep(ctx: AnalysisContext) -> AnalysisRun:
     try:
-        config = load_config(ctx.settings.config_dir)
+        config = load_config(ctx.settings.config_file)
         ctx.runner.ensure_image(IMAGE)
     except (RulesetError, DockerError) as exc:
         return AnalysisRun(tool=TOOL, status=Status.FAILED, notes=[str(exc)])

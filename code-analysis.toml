@@ -1,0 +1,157 @@
+# Configuration of the Code-Analysis-Tool.
+#
+# The scheduler reads this file at the start of every run (docker-compose.yml
+# mounts it read-only): changes need no rebuild, except the OpenGrep rule sets
+# ([opengrep]), which are built into the OpenGrep image.
+
+# ---------------------------------------------------------------------------
+# Step 3: OpenGrep rule sets. Definition: docs/staticAnalysis/README.md
+#
+# OpenGrep ships no rules; it runs the rule sets listed in `active` below.
+# Only these active rule sets are downloaded into the image
+# code-analysis/opengrep; the other definitions are not downloaded. After
+# changing `active`, adding a rule set or changing a commit, rebuild the image:
+#   docker compose -f docker/docker-compose.yml --profile tools build opengrep
+# (The scheduler stops with this hint if the image doesn't match this file.)
+#
+# A rule set is a git repository at a fixed commit. `folders` maps each
+# language of step 1 (C, C++, C#, Java, JavaScript, TypeScript, Python, Rust)
+# to the rule folders of the repository that cover it; languages without an
+# entry get no rules from that set. `exclude` lists rule files (relative to the
+# repository) that are left out, e.g. because OpenGrep rejects them.
+#
+# The rules are only stored in the local Docker image, never in this
+# repository: some licenses forbid distributing them (semgrep-rules: "This
+# license does not allow you to distribute the rules"). Findings and reports
+# contain the rules' messages and metadata, so results produced with such
+# rules must not be published either (see docs/staticAnalysis/README.md).
+
+[opengrep]
+# Active rule sets. To use the OpenGrep fork instead of Semgrep's current
+# rules, replace "semgrep-rules" with "opengrep-rules" and rebuild the image.
+# Activating semgrep-rules downloads them, which means accepting their license.
+active = ["semgrep-rules", "0xdea-semgrep-rules"]
+
+# Fork of semgrep-rules from December 13, 2024 (archived, no further changes).
+[opengrep.rulesets.opengrep-rules]
+repository = "https://github.com/opengrep/opengrep-rules"
+commit = "f1d2b562b414783763fd02a6ed2736eaed622efa"
+license = "LGPL-2.1 with Commons Clause"
+exclude = []
+
+[opengrep.rulesets.opengrep-rules.folders]
+C = ["c"]
+"C#" = ["csharp"]
+Java = ["java"]
+# Most rules in javascript/ cover TypeScript too; typescript/ adds TS-only rules.
+JavaScript = ["javascript", "typescript"]
+TypeScript = ["javascript", "typescript"]
+Python = ["python"]
+Rust = ["rust"]
+
+# Semgrep's own rules. License: Semgrep Rules License v1.0
+# (semgrep.dev/legal/rules-license): "By using the rules, you agree to all of
+# the terms", "You may use the rules only for your own internal business
+# purposes", no distribution, no use as a service for others.
+[opengrep.rulesets.semgrep-rules]
+repository = "https://github.com/semgrep/semgrep-rules"
+commit = "a5ad1714f00c9f7fde980cab0ea1d6dc6d414fd2"
+license = "Semgrep Rules License v1.0"
+exclude = []
+
+[opengrep.rulesets.semgrep-rules.folders]
+C = ["c"]
+"C#" = ["csharp"]
+Java = ["java"]
+JavaScript = ["javascript", "typescript"]
+TypeScript = ["javascript", "typescript"]
+Python = ["python"]
+Rust = ["rust"]
+
+# C and C++ rules by Marco Ivaldi; every rule covers both languages. Neither
+# opengrep-rules nor semgrep-rules has rules for C++ files. The folder noisy/
+# is left out.
+[opengrep.rulesets.0xdea-semgrep-rules]
+repository = "https://github.com/0xdea/semgrep-rules"
+commit = "b9942606d3543e3145a95332e6543fb79a01af00"
+license = "MIT"
+exclude = []
+
+[opengrep.rulesets.0xdea-semgrep-rules.folders]
+C = ["rules/c"]
+"C++" = ["rules/c"]
+
+# ---------------------------------------------------------------------------
+# Step 5: tests. Definition: docs/testAnalysis/README.md
+
+[tests]
+# Network for the test runs (also those for coverage and mutation testing).
+# Tests execute the project's code. Without network they can reach neither the
+# internet nor services in your local network. Only set this to true if you
+# trust the project's code. Downloading the dependencies before the tests
+# always has network.
+network = false
+
+# Time limit of each test run, in minutes. 0 means no limit.
+time_limit_minutes = 60
+
+[tests.mutation]
+# Mutation testing. "sample": a random sample of the source files the tests
+# cover (fixed seed, so the sample is reproducible); "full": every source file
+# of the suite. Full runs can take hours to days on large projects.
+mode = "sample"
+sample_files = 20   # source files per test suite in mode "sample"
+seed = 1
+
+# Time limit of each mutation run, in minutes. 0 means no limit. When it is
+# reached, the run stops and keeps the results written so far.
+time_limit_minutes = 60
+
+# ---------------------------------------------------------------------------
+# Step 6: LLM evaluation with Ollama. Definition: docs/LLMAudit/README.md
+#
+# Two models: a decision model labels each finding (or group of findings), a
+# reasoning model writes the reports from these labels. The final audit
+# (audit.md, audit.json) is built from the reports by the tool itself.
+
+[llm]
+# Ollama's address as seen from the scheduler container. The environment
+# variable OLLAMA_BASE_URL (docker/.env) overrides it.
+base_url = "http://host.docker.internal:11434"
+# Language of the prose the reasoning model writes (reports, audit texts).
+report_language = "English"
+# Areas to evaluate: "security" (steps 3 and 4), "code_quality" (step 2),
+# "test_quality" (step 5).
+areas = ["security", "code_quality", "test_quality"]
+timeout_seconds = 900   # per request to Ollama
+retries = 2             # repetitions of a failed or invalid request
+keep_alive = "10m"      # how long Ollama keeps a model loaded between requests
+# The two models are never loaded at the same time: the tool unloads the
+# decision model before the reasoning model starts, and that one at the end.
+
+[llm.decision]
+# Decision model, called through Ollama's decision endpoint (/v1/systemone).
+# Every finding (or group of findings) is one question; the model chooses one
+# label per question and returns the probability of each label. The rules are
+# the shared input of a request.
+model = "pplx-decider-flash:latest"
+# Ollama scores every question with its own copy of the shared input, so the
+# memory a request needs grows with the number of questions. Keep both limits
+# small: on a Mac with 32 GB, requests with 24 to 32 questions (30 KB) used up
+# the memory; requests with 8 questions took about 2 seconds.
+max_questions = 4         # questions per request (the endpoint allows at most 64)
+max_input_kib = 20         # text per request: shared input once per question, plus the questions
+review_confidence = 0.6    # decisions with a lower confidence are flagged for review
+
+[llm.report]
+# Reasoning model, called through Ollama's chat endpoint (/api/chat) with a
+# JSON schema for the answer. qwen3.8 needs about 17 GB plus its context.
+model = "gpt-oss:20b"
+think = true              # let the model reason before it answers
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+seed = 42
+num_ctx = 16384           # context window in tokens (prompt and answer)
+num_predict = 6144        # maximum tokens per answer, including the reasoning
+entries_per_request = 10  # report entries written per request

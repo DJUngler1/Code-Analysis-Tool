@@ -1,5 +1,8 @@
 """Entry point: ask for the project, check it (step 1), run linters and formatters (step 2),
-run the static code analysis (step 3), check the dependencies (step 4) and the tests (step 5)."""
+run the static code analysis (step 3), check the dependencies (step 4) and the tests (step 5),
+evaluate the results with local LLMs and write the audit (step 6).
+
+`--evaluate <run folder>` runs only step 6 on the results of an earlier run."""
 
 from __future__ import annotations
 
@@ -13,9 +16,15 @@ from scheduler.config import Settings
 from scheduler.dependencies import DependencyResult, run_dependencies
 from scheduler.dependencies.run import STEP_DIR as DEPENDENCIES_STEP_DIR
 from scheduler.dependencies.run import scope_counts
+from scheduler.evaluation import EvaluationResult, run_evaluation
+from scheduler.evaluation.config import ConfigError as LlmConfigError
+from scheduler.evaluation.config import load_config as load_llm_config
+from scheduler.evaluation.ollama import model_key
+from scheduler.evaluation.run import AREA_NAMES, plural
+from scheduler.evaluation.run import STEP_DIR as EVALUATION_STEP_DIR
 from scheduler.linting import LintingResult, Status, run_linting
 from scheduler.ollama import OllamaStatus, check_ollama
-from scheduler.paths import PathError, resolve_project_path
+from scheduler.paths import PathError, resolve_project_path, resolve_run_folder
 from scheduler.static_analysis import AnalysisResult, run_static_analysis
 from scheduler.static_analysis.run import STEP_DIR as ANALYSIS_STEP_DIR
 from scheduler.testing import TestingResult, run_tests
@@ -33,9 +42,12 @@ EXIT_ANALYSIS_INCOMPLETE = 6
 # Step 4 could not run completely: Docker or a tool image missing, a lock file
 # command or a dependency check failed.
 EXIT_DEPENDENCIES_INCOMPLETE = 7
-# Step 5 could not run completely: config/tests.toml invalid, Docker or a test image missing,
+# Step 5 could not run completely: code-analysis.toml ([tests]) invalid, Docker or a test image missing,
 # or the tests of a suite could not be run.
 EXIT_TESTS_INCOMPLETE = 8
+# Step 6 could not run completely: code-analysis.toml ([llm]) invalid, Ollama unreachable or
+# a model missing, or an area got no labels or texts from the models.
+EXIT_EVALUATION_INCOMPLETE = 9
 MAX_LISTED_MANIFESTS = 5
 MAX_LISTED_MODELS = 5
 MAX_LISTED_DIFFERENCES = 10
@@ -47,10 +59,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--check-only", action="store_true", help="only run the acceptance check (step 1), change nothing"
     )
+    parser.add_argument(
+        "--evaluate", metavar="RUN_FOLDER",
+        help="only run step 6 (LLM evaluation and audit) on the results folder of an earlier run",
+    )
     args = parser.parse_args(argv)
+    if args.evaluate is not None and (args.path is not None or args.check_only):
+        parser.error("--evaluate cannot be combined with --path or --check-only")
     settings = Settings.from_env()
 
     try:
+        if args.evaluate is not None:
+            return _evaluate_only(args.evaluate, settings)
         return _run(args.path, settings, check_only=args.check_only)
     except KeyboardInterrupt:
         print("\nInterrupted.")
@@ -59,7 +79,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _run(path_arg: str | None, settings: Settings, *, check_only: bool = False) -> int:
     print("Code-Analysis-Tool\n")
-    print(describe_ollama(check_ollama(settings.ollama_base_url)))
+    print(describe_ollama(check_ollama(settings.ollama_base_url), required_models(settings)))
     if settings.projects_dir is not None:
         print(f"Projects folder: {settings.projects_dir}")
     print()
@@ -102,13 +122,33 @@ def _run(path_arg: str | None, settings: Settings, *, check_only: bool = False) 
     print("\nStep 5 – tests (finding and running them; the project's tests run in containers) ...\n")
     tests = run_tests(result, settings, linting.run_dir)
     print(format_tests(tests))
+
+    print(f"\nStep 6 – LLM evaluation and audit (local models through Ollama at {settings.ollama_base_url}) ...\n")
+    evaluation = run_evaluation(linting.run_dir, settings)
+    print(format_evaluation(evaluation))
     if not linting.complete:
         return EXIT_LINTING_INCOMPLETE
     if not analysis.complete:
         return EXIT_ANALYSIS_INCOMPLETE
     if not dependencies.complete:
         return EXIT_DEPENDENCIES_INCOMPLETE
-    return int(result.outcome) if tests.complete else EXIT_TESTS_INCOMPLETE
+    if not tests.complete:
+        return EXIT_TESTS_INCOMPLETE
+    return int(result.outcome) if evaluation.complete else EXIT_EVALUATION_INCOMPLETE
+
+
+def _evaluate_only(raw: str, settings: Settings) -> int:
+    print("Code-Analysis-Tool – step 6 on the results of an earlier run\n")
+    print(describe_ollama(check_ollama(settings.ollama_base_url), required_models(settings)))
+    try:
+        run_dir = resolve_run_folder(raw, settings)
+    except PathError as exc:
+        print(f"Error: {exc}")
+        return EXIT_INVALID_INPUT
+    print(f"\nStep 6 – LLM evaluation and audit of {run_dir} ...\n")
+    evaluation = run_evaluation(run_dir, settings)
+    print(format_evaluation(evaluation))
+    return 0 if evaluation.complete else EXIT_EVALUATION_INCOMPLETE
 
 
 def prompt_for_project(settings: Settings) -> Path | None:
@@ -127,18 +167,35 @@ def prompt_for_project(settings: Settings) -> Path | None:
             print(f"  {exc}\n")
 
 
-def describe_ollama(status: OllamaStatus) -> str:
+def required_models(settings: Settings) -> tuple[str, ...]:
+    """The models step 6 needs ([llm.decision] and [llm.report]); none if [llm] is invalid (step 6 reports it)."""
+    try:
+        config = load_llm_config(settings.config_file)
+    except LlmConfigError:
+        return ()
+    return (config.decision.model, config.report.model)
+
+
+def describe_ollama(status: OllamaStatus, required: Sequence[str] = ()) -> str:
     if not status.reachable:
         return (
             f"Warning: Ollama is not reachable at {status.base_url} ({status.error}).\n"
-            "         The acceptance check works without it; the LLM evaluation (step 6) will need it."
+            "         The acceptance check works without it; the LLM evaluation (step 6) needs it."
         )
     if not status.models:
-        return f"Ollama: reachable at {status.base_url} (no models installed)"
-    names = ", ".join(status.models[:MAX_LISTED_MODELS])
-    if len(status.models) > MAX_LISTED_MODELS:
-        names += ", ..."
-    return f"Ollama: reachable at {status.base_url} ({len(status.models)} models: {names})"
+        text = f"Ollama: reachable at {status.base_url} (no models installed)"
+    else:
+        names = ", ".join(status.models[:MAX_LISTED_MODELS])
+        if len(status.models) > MAX_LISTED_MODELS:
+            names += ", ..."
+        text = f"Ollama: reachable at {status.base_url} ({len(status.models)} models: {names})"
+    installed = {model_key(name) for name in status.models}
+    missing = [model for model in dict.fromkeys(required) if model_key(model) not in installed]
+    if missing:
+        commands = "; ".join(f"ollama pull {model}" for model in missing)
+        text += (f"\nWarning: step 6 needs {', '.join(missing)}, not installed in Ollama.\n"
+                 f"         Install on the host with: {commands}")
+    return text
 
 
 def format_result(result: AcceptanceResult) -> str:
@@ -285,10 +342,10 @@ def format_tests(result: TestingResult) -> str:
         lines.append(f"{mutation.suite}: mutation testing {describe_mutation(mutation)}")
     failing = sum(run.counts["failed"] + run.counts["error"] for run in result.runs)
     if failing and not result.network:
-        lines.append(f"{failing} tests failed. The tests ran without network (config/tests.toml); "
+        lines.append(f"{failing} tests failed. The tests ran without network (code-analysis.toml, [tests]); "
                      "tests that need it fail for that reason.")
     if result.network and result.runs:
-        lines.append("Warning: the tests ran with network (config/tests.toml: network = true).")
+        lines.append("Warning: the tests ran with network (code-analysis.toml: [tests] network = true).")
     for comparison in result.differences:
         lines.append(f"Differs from HEAD (last commit, without the changes of step 2): {comparison.suite}")
         if comparison.status_after_step_2 != comparison.status_head or not comparison.tests:
@@ -319,3 +376,46 @@ def _run_state(status: str, counts: dict[str, int]) -> str:
         return f"{status}, no test ran"
     return f"{status}, {total} tests (" + ", ".join(f"{count} {outcome}" for outcome, count in counts.items()
                                                     if count) + ")"
+
+
+def format_evaluation(result: EvaluationResult) -> str:
+    lines: list[str] = [""]
+    for area in result.areas:
+        name = AREA_NAMES[area.area]
+        if area.status is Status.SKIPPED:
+            lines.append(f"{name}: skipped" + (f" ({' '.join(area.notes)})" if area.notes else ""))
+            continue
+        text = f"{name}: {_describe_area(area.area, area.statistics)}" if area.statistics else f"{name}:"
+        if area.status is not Status.OK:
+            text += f" – {area.status.value}" + (f" ({' '.join(area.notes)})" if area.notes else "")
+        lines.append(text)
+    lines += [f"Error: {error}" for error in result.errors]
+    if result.audit is not None:
+        lines.append(f"Audit: {result.audit}")
+    if result.run_dir is not None:
+        lines.append(f"Results: {result.run_dir / EVALUATION_STEP_DIR}")
+    lines.append("Step 6 complete." if result.complete else "Step 6 incomplete.")
+    return "\n".join(lines)
+
+
+def _describe_area(area: str, statistics: dict) -> str:
+    low = statistics.get("low_confidence", 0)
+    review = f"; {plural(low, 'decision', 'decisions')} with low confidence (see the review list)" if low else ""
+    if area == "security":
+        labels = statistics.get("by_label", {})
+        severity = ", ".join(f"{count} {name}" for name, count in statistics.get("real_by_severity", {}).items())
+        return (f"{labels.get('REAL', 0)} REAL of {statistics.get('input_findings', 0)} findings"
+                + (f" ({severity})" if severity else "") + review)
+    if area == "code_quality":
+        return (f"{statistics.get('groups_by_label', {}).get('REAL', 0)} REAL groups "
+                f"({statistics.get('findings_by_label', {}).get('REAL', 0)} findings) of "
+                f"{statistics.get('groups', 0)} groups ({statistics.get('input_findings', 0)} findings)" + review)
+    parts = []
+    for key, singular, several in (("failed_test_groups", "group of failed tests", "groups of failed tests"),
+                                   ("weakly_tested_files", "weakly tested file", "weakly tested files"),
+                                   ("surviving_mutants", "surviving mutant", "surviving mutants")):
+        counts = statistics.get(key) or {}
+        if counts:
+            parts.append(f"{plural(sum(counts.values()), singular, several)} ("
+                         + ", ".join(f"{count} {name}" for name, count in counts.items()) + ")")
+    return ("; ".join(parts) or "nothing to label") + review

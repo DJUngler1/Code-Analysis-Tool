@@ -2,7 +2,7 @@
 measure the coverage of the tests and test them with mutants, after step 2.
 
 Each suite runs in two phases: an online phase downloads the dependencies,
-then the tests run without network (unless config/tests.toml allows it).
+then the tests run without network (unless code-analysis.toml allows it).
 Suites run one after another: the test tools use all processor cores
 themselves, and parallel runs could make timing-sensitive tests fail.
 

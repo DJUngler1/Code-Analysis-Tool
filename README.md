@@ -18,7 +18,7 @@ Requirements: Docker (Docker Desktop on macOS/Windows) and, for the LLM evaluati
    - `OUTPUT_DIR` to the folder for the results, outside your projects. It is created if missing.
    - `SONARQUBE_ADMIN_PASSWORD` and `SONARQUBE_DB_PASSWORD` for SonarQube (step 3). The admin password needs at least 12 characters with an uppercase and a lowercase letter, a digit and a special character. The tool sets it on SonarQube's first start; you log in with it at http://localhost:9000.
    - Optional: `CONAN_AUDIT_TOKEN` for `conan audit` in step 4 (free registration at https://audit.conan.io/register).
-2. Build the tool images: linters/formatters, OpenGrep, the SonarQube scanners, the dependency checks and the test images. Do this once, and again after changes in `docker/linters/`, `docker/static-analysis/`, `docker/dependencies/`, `docker/tests/` or the rule sets in `config/opengrep.toml`. It downloads the toolchains (about 5 GB; the six test images of step 5 take about 10 GB more disk space):
+2. Build the tool images: linters/formatters, OpenGrep, the SonarQube scanners, the dependency checks and the test images. Do this once, and again after changes in `docker/linters/`, `docker/static-analysis/`, `docker/dependencies/`, `docker/tests/` or the rule sets in `[opengrep]` of `code-analysis.toml`. It downloads the toolchains (about 5 GB; the six test images of step 5 take about 10 GB more disk space):
    ```sh
    docker compose -f docker/docker-compose.yml --profile tools build
    ```
@@ -31,7 +31,7 @@ Requirements: Docker (Docker Desktop on macOS/Windows) and, for the LLM evaluati
    ```sh
    bin/code-analysis
    ```
-   It asks for the project path and runs the analysis inside the container. The container keeps running afterwards for the next run. To skip the prompt, pass the path: `bin/code-analysis --path /path/to/project`. To only check whether a project is accepted, without changing anything, add `--check-only`.
+   It asks for the project path and runs the analysis inside the container. The container keeps running afterwards for the next run. To skip the prompt, pass the path: `bin/code-analysis --path /path/to/project`. To only check whether a project is accepted, without changing anything, add `--check-only`. To run only the LLM evaluation (step 6) on the results of an earlier run: `bin/code-analysis --evaluate <run folder>`.
 
    To call it from anywhere as `code-analysis`, link the script into a folder on your `PATH`, e.g. `ln -s "$PWD/bin/code-analysis" ~/.local/bin/code-analysis`. Without the script (e.g. on Windows): `docker exec -it code-analysis-scheduler code-analysis`.
 5. Stop the containers when you are done (SonarQube's data stays in Docker volumes; `down -v` would delete it):
@@ -40,6 +40,16 @@ Requirements: Docker (Docker Desktop on macOS/Windows) and, for the LLM evaluati
    ```
 
 After changes to the scheduler code, rebuild with `up -d --build` again.
+
+### Configuration
+
+All settings are in one file, [`code-analysis.toml`](code-analysis.toml) in the repository root. The container mounts it read-only and reads it at every run, so changes need no rebuild, except for the OpenGrep rule sets (they are built into the image).
+
+| Section | Step | Content |
+|---|---|---|
+| `[opengrep]`, `[opengrep.rulesets.<name>]` | 3 | Active rule sets and their definitions |
+| `[tests]`, `[tests.mutation]` | 5 | Network and time limit of the test runs; scope and time limit of mutation testing |
+| `[llm]`, `[llm.decision]`, `[llm.report]` | 6 | Ollama address, report language, areas; the decision model and the reasoning model with their parameters |
 
 ### Acceptance check (step 1)
 
@@ -52,15 +62,16 @@ Language shares are bytes of source code per language, as on GitHub. A `.h` file
 
 | Exit code | Meaning |
 |---|---|
-| 0 | Project accepted (and, without `--check-only`, steps 2 to 5 completed) |
+| 0 | Project accepted (and, without `--check-only`, steps 2 to 6 completed) |
 | 1 | Invalid input or no project selected |
 | 2 | Language not supported, or no source code found |
 | 3 | No package manager found for the primary language |
 | 4 | Not a git repository, or uncommitted changes |
 | 5 | Step 2 incomplete: `OUTPUT_DIR`, Docker or a tool image missing, a tool failed, or a project file could not be moved back |
-| 6 | Step 3 incomplete: OpenGrep or SonarQube failed, e.g. `config/opengrep.toml` invalid, a tool image missing or outdated, the SonarQube server not running or `SONARQUBE_ADMIN_PASSWORD` missing |
+| 6 | Step 3 incomplete: OpenGrep or SonarQube failed, e.g. `[opengrep]` in `code-analysis.toml` invalid, a tool image missing or outdated, the SonarQube server not running or `SONARQUBE_ADMIN_PASSWORD` missing |
 | 7 | Step 4 incomplete: Docker or a tool image missing, a dependency check failed, or a lock file could not be generated (completely) |
-| 8 | Step 5 incomplete: `config/tests.toml` invalid, Docker or a test image missing, or the tests of a suite could not be run (e.g. the build failed) or their coverage or mutation testing failed |
+| 8 | Step 5 incomplete: `[tests]` in `code-analysis.toml` invalid, Docker or a test image missing, or the tests of a suite could not be run (e.g. the build failed) or their coverage or mutation testing failed |
+| 9 | Step 6 incomplete: `[llm]` in `code-analysis.toml` invalid, Ollama unreachable or a model missing, or an area got no labels or not all texts from the models |
 | 125 | (`bin/code-analysis` only) Docker or the container is not running |
 
 ### Linters and formatters (step 2)
@@ -87,12 +98,12 @@ After the project is accepted, the tool runs a fixed formatter and linter per la
 After step 2, OpenGrep and SonarQube Community Build analyse the project in parallel, as defined in [docs/staticAnalysis/README.md](docs/staticAnalysis/README.md). Step 3 also runs when a tool of step 2 failed, and each tool runs even if the other fails.
 
 **OpenGrep** searches for vulnerabilities with rule sets.
-- **Rules:** OpenGrep ships no rules. The rule sets are defined in [`config/opengrep.toml`](config/opengrep.toml), and `rulesets` there lists the active ones:
+- **Rules:** OpenGrep ships no rules. The rule sets are defined in `[opengrep.rulesets.<name>]` of [`code-analysis.toml`](code-analysis.toml), and `active` under `[opengrep]` lists the active ones:
   - `opengrep-rules`, the OpenGrep fork of the Semgrep rules;
   - `semgrep-rules`, Semgrep's current rules. Results produced with them must not be published (see [Licenses](docs/staticAnalysis/README.md#licenses)).
   - `0xdea-semgrep-rules`, for C and C++.
 
-  To switch, edit `rulesets` in that file and rebuild the OpenGrep image (`docker compose -f docker/docker-compose.yml --profile tools build opengrep`). Only active rule sets are downloaded. A new rule set needs a `[rulesets.<name>]` entry. The rules are stored only in the local image, never in this repository.
+  To switch, edit `active` in that file and rebuild the OpenGrep image (`docker compose -f docker/docker-compose.yml --profile tools build opengrep`). Only active rule sets are downloaded. A new rule set needs an `[opengrep.rulesets.<name>]` entry. The rules are stored only in the local image, never in this repository.
 - **What it scans:** the working tree as step 2 left it, with the files git knows. OpenGrep's own default ignore list applies (e.g. `tests/`, `build/`, `vendor/`, `node_modules/`), and the project's `.semgrepignore` is ignored. With `--taint-intrafile`, OpenGrep follows data across functions within a file, not across files.
 - **How it runs:** in a fresh container of `code-analysis/opengrep`, without network and with the project mounted read-only, so it cannot change the code.
 
@@ -156,11 +167,11 @@ After step 4, the tool finds and runs the project's tests, measures their covera
   - JavaScript tests that need a browser (Playwright, Cypress, Karma) and Conda environments are not run.
 - **Network:** the tests execute the project's code, so they run **without network** by default.
   - Only the download of the dependencies before them has network.
-  - To let the tests use the network, set `network = true` in [`config/tests.toml`](config/tests.toml). Only do this if you trust the project's code.
+  - To let the tests use the network, set `network = true` under `[tests]` in [`code-analysis.toml`](code-analysis.toml). Only do this if you trust the project's code.
   - The same file sets the time limit per test run (`time_limit_minutes`, default 60, `0` for no limit). The tool reads it at every run.
 - **Changes of step 2:** if step 2 changed the project, the tests also run on the last commit (HEAD), and tests that end differently are listed. Without differences, nothing is reported.
 - **Coverage:** after the tests, a second run measures the line and branch coverage with one tool per language: coverage.py, Jest/Vitest/c8, JaCoCo, coverlet, cargo-llvm-cov, gcovr. There is no minimum. It counts the program's source files, not the tests; source files no test loaded are listed.
-- **Mutation testing:** mutmut, StrykerJS, PIT, Stryker.NET and cargo-mutants change the source code in small ways and check whether the tests notice. Tests that failed are left out where the tool allows it (StrykerJS cannot: such suites are skipped). C/C++ is not supported. `[mutation]` in [`config/tests.toml`](config/tests.toml) sets the scope and the time limit:
+- **Mutation testing:** mutmut, StrykerJS, PIT, Stryker.NET and cargo-mutants change the source code in small ways and check whether the tests notice. Tests that failed are left out where the tool allows it (StrykerJS cannot: such suites are skipped). C/C++ is not supported. `[tests.mutation]` in [`code-analysis.toml`](code-analysis.toml) sets the scope and the time limit:
   - `mode = "sample"` (default): a reproducible random sample of `sample_files` (default 20) source files the tests cover. `mode = "full"`: every source file, which can take hours on large projects.
   - `time_limit_minutes` (default 60, `0` for no limit) per mutation run; results written until then are kept.
 
@@ -172,13 +183,30 @@ After step 4, the tool finds and runs the project's tests, measures their covera
 | `step5-tests/mutants.json` | Every mutant: file, line, kind, change, state (`Killed`, `Survived`, `NoCoverage`, …); the source line of mutants the tests did not detect |
 | `step5-tests/<nn>-<language>-<folder>/` | Logs and raw reports of each run (`run/`, `run-head/` for the comparison, `coverage/`, `mutation/`) |
 
+### LLM evaluation and audit (step 6)
+
+After step 5, two local models evaluate the results, as defined in [docs/LLMAudit/README.md](docs/LLMAudit/README.md):
+- **Areas:** security (steps 3 and 4), code quality (step 2), test quality (step 5).
+- **The tool** assigns ids, merges duplicate findings (also across tools), groups the lint findings by tool, rule and scope, and counts.
+- **The decision model** (`pplx-decider-flash:latest`) labels every item, e.g. `REAL`, `FALSE_POSITIVE` or `NOISE`. Decisions with low confidence are flagged for review.
+- **The reasoning model** (`qwen3.8:latest`) writes the texts of the reports: titles, descriptions, recommendations, reasons and summaries. It never changes a label.
+- **The audit** (`audit.md`, `audit.json` in the run folder) is built by the tool from the reports.
+
+Both models must be installed in Ollama (`ollama pull <model>`); they are never loaded at the same time. The models and their parameters are set in `[llm]` of [`code-analysis.toml`](code-analysis.toml). To run step 6 again on an earlier run, e.g. after changing a prompt: `bin/code-analysis --evaluate ~/code-analysis-results/<project>/<date_time>Z`.
+
+| Path | Content |
+|---|---|
+| `audit.md`, `audit.json` | The final audit: overview, key figures, security, code quality, test quality, review list, method and limits |
+| `step6-llm-evaluation/summary.json` | Models, settings, per area: status, items, requests, durations, tokens, labels |
+| `step6-llm-evaluation/<area>/` | `items.json`, `decisions.json`, `report.json` and every request and answer (`requests/`) |
+
 ### Ollama
 
 The container reaches Ollama at `http://host.docker.internal:11434` (change it with `OLLAMA_BASE_URL` in `docker/.env`). With Docker Desktop the default Ollama setup works. On Linux, Ollama must listen on all interfaces (`OLLAMA_HOST=0.0.0.0 ollama serve`), and `HOST_UID` / `HOST_GID` should be set in `docker/.env` so files written by the tool keep your ownership.
 
 ### Network
 
-All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The OpenGrep container of step 3 has no network: its rules are part of the image. The SonarQube scanners use the network to reach the server (`http://sonarqube:9000`) and, for builds, the dependencies. The SonarQube server is published only on `127.0.0.1:9000`. The containers of step 4 use the network to resolve dependencies and to query OSV.dev, deps.dev and the registries. In step 5, only the download of the dependencies has network; the tests themselves run without it (`--network none`) unless `config/tests.toml` allows it.
+All containers join the bridge network `code-analysis-net`, including the linter/formatter containers of step 2 (they download dependencies, e.g. crates or NuGet packages). The OpenGrep container of step 3 has no network: its rules are part of the image. The SonarQube scanners use the network to reach the server (`http://sonarqube:9000`) and, for builds, the dependencies. The SonarQube server is published only on `127.0.0.1:9000`. The containers of step 4 use the network to resolve dependencies and to query OSV.dev, deps.dev and the registries. In step 5, only the download of the dependencies has network; the tests themselves run without it (`--network none`) unless `[tests]` in `code-analysis.toml` allows it.
 
 ### Development
 
@@ -189,7 +217,7 @@ python3 -m venv .venv
 .venv/bin/pytest
 ```
 
-The integration tests of steps 2 to 5 run the real tool images and are skipped by default; those of steps 4 and 5 need internet access. The SonarQube tests also need the running server (`up -d`) and `SONARQUBE_ADMIN_PASSWORD` (environment or `docker/.env`). They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
+Step 6 is tested with a fake Ollama. The integration tests of steps 2 to 5 run the real tool images and are skipped by default; those of steps 4 and 5 need internet access. The SonarQube tests also need the running server (`up -d`) and `SONARQUBE_ADMIN_PASSWORD` (environment or `docker/.env`). They need a folder that Docker can mount; on macOS the temporary folder is not shared, so use one below your home folder:
 
 ```sh
 CODE_ANALYSIS_DOCKER_TEST_DIR=~/code-analysis-results/_itest .venv/bin/pytest -m docker

@@ -103,9 +103,9 @@ The tests execute the project's code. Each suite therefore runs in two phases:
 
 Projects with a Maven or Gradle wrapper (`mvnw`, `gradlew`) use it. Package caches (Maven repository, Gradle home, NuGet, Cargo, npm/Yarn/pnpm/Bun, uv/Poetry/PDM/pip) live in `step5-tests/cache/` during the run and are deleted afterwards.
 
-**Network for the tests:** off by default. `config/tests.toml` switches it on (`[tests] network = true`). The tests can then reach the internet and services in your local network: only do this if you trust the project's code. The tool then prints a warning. Phase 1 always has network.
+**Network for the tests:** off by default. `code-analysis.toml` switches it on (`[tests] network = true`). The tests can then reach the internet and services in your local network: only do this if you trust the project's code. The tool then prints a warning. Phase 1 always has network.
 
-**Time limit:** `[tests] time_limit_minutes` in `config/tests.toml` (default 60, `0` for no limit) applies to each test command. Phase 1 has a limit of 60 minutes.
+**Time limit:** `[tests] time_limit_minutes` in `code-analysis.toml` (default 60, `0` for no limit) applies to each test command. Phase 1 has a limit of 60 minutes.
 
 ### JavaScript and TypeScript frameworks
 
@@ -193,7 +193,7 @@ Every tool uses its default mutators.
 
 ### Which files are mutated
 
-`[mutation]` in `config/tests.toml`, read at every run:
+`[tests.mutation]` in `code-analysis.toml`, read at every run:
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -244,7 +244,7 @@ Status of a coverage run: `ok` (report read), `partial` (time limit reached), `f
 
 Status of a mutation run: `ok` (report read), `partial` (time limit reached), `failed` (the tool wrote no report), `skipped` (the tests did not run, StrykerJS with failing tests, C/C++).
 
-Step 5 is incomplete (exit code 8) if detection failed, `config/tests.toml` is invalid, Docker or a test image is missing, or a test, coverage or mutation run is `failed`.
+Step 5 is incomplete (exit code 8) if detection failed, `[tests]` in `code-analysis.toml` is invalid, Docker or a test image is missing, or a test, coverage or mutation run is `failed`.
 
 ## Results
 

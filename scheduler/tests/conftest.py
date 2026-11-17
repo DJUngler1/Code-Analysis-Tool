@@ -15,17 +15,18 @@ DEFAULT_RULESETS = ("opengrep-rules", "0xdea-semgrep-rules")
 
 
 def opengrep_config(folder: Path, rulesets: tuple[str, ...] = DEFAULT_RULESETS) -> Path:
-    """A copy of config/opengrep.toml with the given active rule sets.
+    """A copy of code-analysis.toml in `folder` with the given active OpenGrep rule sets; returns the file.
 
     Keeps the tests independent of the rule sets the user has activated.
     """
-    text = (REPOSITORY / "config" / "opengrep.toml").read_text()
+    text = (REPOSITORY / "code-analysis.toml").read_text()
     active = ", ".join(f'"{name}"' for name in rulesets)
-    text, count = re.subn(r"(?m)^rulesets = \[.*\]$", f"rulesets = [{active}]", text)
-    assert count == 1, "config/opengrep.toml: no `rulesets = [...]` line"
+    text, count = re.subn(r"(?m)^active = \[.*\]$", f"active = [{active}]", text)
+    assert count == 1, "code-analysis.toml: no `active = [...]` line"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "opengrep.toml").write_text(text)
-    return folder
+    path = folder / "code-analysis.toml"
+    path.write_text(text)
+    return path
 
 MakeProject = Callable[[Mapping[str, str]], Path]
 

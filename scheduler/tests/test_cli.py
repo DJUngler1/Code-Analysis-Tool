@@ -2,9 +2,11 @@ import pytest
 from conftest import commit_all, requires_git
 from test_ollama import unused_port
 
-from scheduler.cli import main
+from scheduler.cli import describe_ollama, main
 from scheduler.linting import LintingResult, Status, ToolRun
 from scheduler.dependencies import Coverage, DependencyFinding, DependencyResult, DependencyRun
+from scheduler.evaluation import AreaRun, EvaluationResult
+from scheduler.ollama import OllamaStatus
 from scheduler.static_analysis import AnalysisResult, AnalysisRun
 from scheduler.testing import Suite, TestingResult
 
@@ -74,6 +76,25 @@ class FakeTests(list):
 def step5_calls(monkeypatch) -> FakeTests:
     fake = FakeTests()
     monkeypatch.setattr("scheduler.cli.run_tests", fake)
+    return fake
+
+
+class FakeEvaluation(list):
+    """Stands in for step 6 (Ollama): records the run folders, returns `result`."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.result = EvaluationResult(None)
+
+    def __call__(self, run_dir, settings):
+        self.append(run_dir)
+        return self.result
+
+
+@pytest.fixture(autouse=True)
+def step6_calls(monkeypatch) -> FakeEvaluation:
+    fake = FakeEvaluation()
+    monkeypatch.setattr("scheduler.cli.run_evaluation", fake)
     return fake
 
 
@@ -294,3 +315,102 @@ def test_step_4_failure_takes_precedence_over_step_5(monkeypatch, make_project, 
     dependency_calls.result = DependencyResult(tmp_path / "run", errors=["Docker is not reachable"])
     step5_calls.result = TestingResult(tmp_path / "run", errors=["boom"])
     assert main(["--path", str(root)]) == 7
+
+
+@requires_git
+def test_incomplete_step_6_exits_with_9(monkeypatch, make_project, capsys, tmp_path, step6_calls):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    fake_linting(monkeypatch, LintingResult(tmp_path / "run", [ToolRun("Python", "ruff check", Status.OK)]))
+    security = AreaRun("security", Status.PARTIAL, items=4, notes=["texts missing"],
+                       statistics={"input_findings": 6, "by_label": {"REAL": 3, "NOISE": 1},
+                                   "real_by_severity": {"high": 2, "medium": 1}, "low_confidence": 1})
+    step6_calls.result = EvaluationResult(
+        tmp_path / "run",
+        [security, AreaRun("test_quality", notes=["Step 5 did not run: no results to evaluate."])],
+        audit=tmp_path / "run" / "audit.md",
+        errors=["Ollama stopped answering"],
+    )
+    assert main(["--path", str(root)]) == 9
+    out = capsys.readouterr().out
+    assert step6_calls == [tmp_path / "run"]
+    assert "Step 6 – LLM evaluation and audit" in out
+    assert ("security: 3 REAL of 6 findings (2 high, 1 medium); 1 decision with low confidence "
+            "(see the review list) – partial (texts missing)") in out
+    assert "test quality: skipped (Step 5 did not run: no results to evaluate.)" in out
+    assert "Error: Ollama stopped answering" in out
+    assert f"Audit: {tmp_path / 'run' / 'audit.md'}" in out
+    assert "Step 6 incomplete." in out
+
+
+@requires_git
+def test_step_5_failure_takes_precedence_over_step_6(monkeypatch, make_project, tmp_path, step5_calls,
+                                                    step6_calls):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    fake_linting(monkeypatch, LintingResult(tmp_path / "run", [ToolRun("Python", "ruff check", Status.OK)]))
+    step5_calls.result = TestingResult(tmp_path / "run", errors=["boom"])
+    step6_calls.result = EvaluationResult(tmp_path / "run", errors=["Ollama is not reachable"])
+    assert main(["--path", str(root)]) == 8
+
+
+def make_run_folder(tmp_path):
+    run = tmp_path / "results" / "app" / "2026-01-31_120000Z"
+    run.mkdir(parents=True)
+    (run / "run.json").write_text("{}")
+    return run
+
+
+def test_evaluate_runs_only_step_6(monkeypatch, tmp_path, capsys, step6_calls, analysis_calls, step5_calls):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "results"))
+    run = make_run_folder(tmp_path)
+    calls = fake_linting(monkeypatch, LintingResult(None))
+    step6_calls.result = EvaluationResult(run)
+    assert main(["--evaluate", str(run)]) == 0
+    out = capsys.readouterr().out
+    assert step6_calls == [run.resolve()]
+    assert calls == [] and analysis_calls == [] and step5_calls == []
+    assert "Step 6 – LLM evaluation and audit of" in out and "Step 6 complete." in out
+
+
+def test_evaluate_exits_with_9_when_incomplete(monkeypatch, tmp_path, step6_calls):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "results"))
+    run = make_run_folder(tmp_path)
+    step6_calls.result = EvaluationResult(run, errors=["Ollama is not reachable"])
+    assert main(["--evaluate", str(run)]) == 9
+
+
+@pytest.mark.parametrize("folder, message", [
+    ("results/app", "is not the folder of a run"),
+    ("elsewhere", "is outside the results folder"),
+    ("results/missing", "does not exist"),
+])
+def test_evaluate_rejects_other_folders(monkeypatch, tmp_path, capsys, step6_calls, folder, message):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "results"))
+    make_run_folder(tmp_path)
+    (tmp_path / "elsewhere").mkdir()
+    assert main(["--evaluate", str(tmp_path / folder)]) == 1
+    assert message in capsys.readouterr().out
+    assert step6_calls == []
+
+
+def test_evaluate_needs_an_absolute_path(capsys, step6_calls):
+    assert main(["--evaluate", "results/app"]) == 1
+    assert "is not an absolute path" in capsys.readouterr().out
+
+
+def test_evaluate_cannot_be_combined_with_path(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--evaluate", "/tmp/run", "--path", "/tmp/project"])
+    assert exit_info.value.code == 2
+    assert "--evaluate cannot be combined" in capsys.readouterr().err
+
+
+def test_ollama_line_names_missing_models():
+    status = OllamaStatus("http://ollama", True, ("qwen3.8:latest", "llama3.2:3b"))
+    text = describe_ollama(status, ("pplx-decider-flash:latest", "qwen3.8"))
+    assert text.startswith("Ollama: reachable at http://ollama (2 models: qwen3.8:latest, llama3.2:3b)")
+    warning = text.split("\n", 1)[1]
+    assert warning == ("Warning: step 6 needs pplx-decider-flash:latest, not installed in Ollama.\n"
+                       "         Install on the host with: ollama pull pplx-decider-flash:latest")
+    assert "Warning" not in describe_ollama(status, ("qwen3.8",))

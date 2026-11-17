@@ -74,7 +74,7 @@ def run_tests(
     tested = [suite for suite in result.suites if suite.tests_found]
     if tested:
         try:
-            config = load_config(settings.config_dir)
+            config = load_config(settings.config_file)
             result.network = config.network
             runner = runner or DockerRunner(settings.tools_network)
             runner.check_available()
@@ -83,7 +83,7 @@ def run_tests(
         except (ConfigError, DockerError) as exc:
             result.errors.append(str(exc))
         else:
-            out("\n  Running the tests " + ("WITH network (config/tests.toml: network = true)"
+            out("\n  Running the tests " + ("WITH network (code-analysis.toml: [tests] network = true)"
                                           if config.network else "without network") + " ...")
             ctx = TestContext(acceptance.project, step_dir, acceptance, runner, settings, config, out, result.suites)
             execute.run_suites(ctx, tested, result)

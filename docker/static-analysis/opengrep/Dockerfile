@@ -1,8 +1,17 @@
 # OpenGrep image (step 3): the OpenGrep binary and the rule sets that are active
-# in config/opengrep.toml, so a scan needs no network. Rule sets that are only
-# defined are not downloaded; activating one needs a rebuild.
+# in [opengrep] of code-analysis.toml, so a scan needs no network. Rule sets that
+# are only defined are not downloaded; activating one needs a rebuild.
 # Build context is the repository root (see docker/docker-compose.yml).
 # Definition: docs/staticAnalysis/README.md
+
+# Only the [opengrep] section of the configuration file: changes to other
+# sections ([tests], [llm]) must not invalidate the rule set layers below.
+FROM python:3.13.18-slim AS config
+COPY code-analysis.toml /tmp/code-analysis.toml
+RUN python3 -c 'import json, tomllib; \
+data = tomllib.load(open("/tmp/code-analysis.toml", "rb")); \
+json.dump(data.get("opengrep", {}), open("/tmp/opengrep.json", "w"), indent=2, sort_keys=True)'
+
 FROM python:3.13.18-slim
 
 # The checksums below belong to this version (digests of the GitHub release assets).
@@ -47,14 +56,15 @@ RUN mkdir -p /tmp/home \
 
 # Active rule sets: fetched at the pinned commits and loaded once by OpenGrep,
 # which fails the build if it rejects a rule. Last, so that a change of the
-# config file only repeats this step.
-COPY config/opengrep.toml docker/static-analysis/opengrep/fetch_rulesets.py /opt/code-analysis/opengrep/
+# [opengrep] section only repeats this step.
+COPY --from=config /tmp/opengrep.json /opt/code-analysis/opengrep/
+COPY docker/static-analysis/opengrep/fetch_rulesets.py /opt/code-analysis/opengrep/
 
 # Caches created while building belong to root, but the containers run as the
 # host user: start every run with an empty, writable /tmp.
 RUN mkdir -p /tmp/home \
     && python3 /opt/code-analysis/opengrep/fetch_rulesets.py \
-        /opt/code-analysis/opengrep/opengrep.toml /opt/code-analysis/opengrep \
+        /opt/code-analysis/opengrep/opengrep.json /opt/code-analysis/opengrep \
     && chmod -R a+rX /opt/code-analysis \
     && find /tmp -mindepth 1 -maxdepth 1 -exec rm -rf {} + \
     && mkdir -m 1777 /tmp/home

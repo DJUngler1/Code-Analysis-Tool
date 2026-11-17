@@ -26,7 +26,7 @@ from scheduler.static_analysis.rulesets import load_config
 
 pytestmark = pytest.mark.docker
 
-CONFIG_DIR = REPOSITORY / "config"
+CONFIG_FILE = REPOSITORY / "code-analysis.toml"
 
 
 @pytest.fixture(scope="module")
@@ -42,9 +42,9 @@ def runner():
 
 @pytest.fixture(scope="module")
 def image_rulesets(runner) -> tuple[str, ...]:
-    """Rule sets in the image, in the order of config/opengrep.toml."""
+    """Rule sets in the image, in the order of [opengrep.rulesets] in code-analysis.toml."""
     in_image = {key.split(":", 1)[1] for key in runner.image_versions(IMAGE) if key.startswith("ruleset:")}
-    defined = tomllib.loads((CONFIG_DIR / "opengrep.toml").read_text())["rulesets"]
+    defined = tomllib.loads(CONFIG_FILE.read_text())["opengrep"]["rulesets"]
     return tuple(name for name in defined if name in in_image)
 
 
@@ -77,9 +77,9 @@ def project(workspace: Path, files: dict[str, str]) -> Path:
 
 
 def analyse(root: Path, workspace: Path, runner, rulesets: tuple[str, ...]):
-    config_dir = opengrep_config(workspace / "config", rulesets)
+    config_file = opengrep_config(workspace / "config", rulesets)
     settings = Settings(projects_dir=None, host_home=None, ollama_base_url="x",
-                        output_dir=workspace / "results", config_dir=config_dir)
+                        output_dir=workspace / "results", config_file=config_file)
     acceptance = run_acceptance(root)
     assert acceptance.accepted, acceptance.message
     return run_static_analysis(acceptance, settings, workspace / "results" / "run", runner=runner,
@@ -176,9 +176,9 @@ def test_every_supported_language_gets_rules(workspace, runner, image_rulesets):
 def test_image_contains_only_the_active_rule_sets(image_rulesets):
     # Inactive rule sets (by default semgrep-rules, whose license must be
     # accepted consciously) are not downloaded into the image.
-    active = tuple(ruleset.name for ruleset in load_config(CONFIG_DIR).active)
+    active = tuple(ruleset.name for ruleset in load_config(CONFIG_FILE).active)
     assert set(image_rulesets) == set(active), (
-        "the image doesn't match config/opengrep.toml; rebuild it: "
+        "the image doesn't match [opengrep] in code-analysis.toml; rebuild it: "
         "docker compose -f docker/docker-compose.yml --profile tools build opengrep"
     )
 

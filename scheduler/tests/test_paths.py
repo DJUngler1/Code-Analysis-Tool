@@ -61,13 +61,22 @@ def test_path_outside_projects_dir_is_rejected(tmp_path):
 def test_settings_from_env(tmp_path):
     loaded = Settings.from_env({
         "PROJECTS_DIR": str(tmp_path), "HOST_HOME": "/Users/me", "OLLAMA_BASE_URL": "http://ollama:11434/",
-        "CONFIG_DIR": "/app/config",
+        "CONFIG_FILE": "/app/code-analysis.toml",
     })
     assert loaded == Settings(tmp_path.resolve(), Path("/Users/me"), "http://ollama:11434",
-                              config_dir=Path("/app/config"))
+                              config_file=Path("/app/code-analysis.toml"))
     assert Settings.from_env({}).projects_dir is None
 
 
-def test_config_dir_defaults_to_the_repository_folder():
-    # Running from the source tree: the repository's config/ folder.
-    assert Settings.from_env({}).config_dir == Path(__file__).resolve().parents[2] / "config"
+def test_config_file_defaults_to_the_repository_file():
+    # Running from the source tree: code-analysis.toml in the repository root.
+    assert Settings.from_env({}).config_file == Path(__file__).resolve().parents[2] / "code-analysis.toml"
+
+
+def test_ollama_address_from_the_config_file(tmp_path):
+    config = tmp_path / "code-analysis.toml"
+    config.write_text('[llm]\nbase_url = "http://gpu-box:11434/"\n')
+    assert Settings.from_env({"CONFIG_FILE": str(config)}).ollama_base_url == "http://gpu-box:11434"
+    # The environment variable wins (docker/.env on Linux).
+    assert Settings.from_env({"CONFIG_FILE": str(config), "OLLAMA_BASE_URL": "http://x:1"}).ollama_base_url \
+        == "http://x:1"

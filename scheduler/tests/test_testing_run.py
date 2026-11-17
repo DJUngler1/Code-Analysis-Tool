@@ -125,17 +125,17 @@ def test_libtest_output():
 
 def test_config_defaults_and_values(tmp_path):
     assert load_config(None) == TestsConfig(network=False, time_limit_minutes=60)
-    repository = Path(__file__).resolve().parents[2] / "config"
+    repository = Path(__file__).resolve().parents[2] / "code-analysis.toml"
     assert load_config(repository) == TestsConfig(network=False, time_limit_minutes=60)
-    (tmp_path / "tests.toml").write_text("[tests]\nnetwork = true\ntime_limit_minutes = 0\n")
-    config = load_config(tmp_path)
+    (tmp_path / "code-analysis.toml").write_text("[tests]\nnetwork = true\ntime_limit_minutes = 0\n")
+    config = load_config(tmp_path / "code-analysis.toml")
     assert config.network and config.time_limit_seconds is None
 
 
 @pytest.mark.parametrize("text", ["[tests]\nnetwork = 'yes'\n", "[tests]\ntime_limit_minutes = -1\n",
                                   "[tests]\ntime_limit_minutes = 1.5\n", "[tests\n"])
 def test_config_errors(tmp_path, text):
-    (tmp_path / "tests.toml").write_text(text)
+    (tmp_path / "code-analysis.toml").write_text(text)
     with pytest.raises(ConfigError):
         load_config(tmp_path)
 
@@ -264,8 +264,8 @@ def python_project(make_project):
     return project
 
 
-def settings(config_dir=None):
-    return Settings(None, None, "x", tools_network="code-analysis-net", config_dir=config_dir)
+def settings(config_file=None):
+    return Settings(None, None, "x", tools_network="code-analysis-net", config_file=config_file)
 
 
 @requires_git
@@ -324,7 +324,7 @@ def test_run_tests_online_download_then_offline_tests(make_project, tmp_path):
             "1 of 2 source files not loaded by any test") in text
     assert ("Python (requirements.txt): mutation testing ok, 2 mutants in 1 files, 1 Killed, 1 NoCoverage, "
             "score 50.0%") in text
-    assert "2 tests failed. The tests ran without network (config/tests.toml)" in text
+    assert "2 tests failed. The tests ran without network (code-analysis.toml, [tests])" in text
     assert "HEAD" not in text
 
 
@@ -346,10 +346,9 @@ def test_run_tests_compares_with_head_after_changes(make_project, tmp_path):
 @requires_git
 def test_run_tests_with_network_from_the_configuration(make_project, tmp_path):
     project = python_project(make_project)
-    (tmp_path / "config").mkdir()
-    (tmp_path / "config" / "tests.toml").write_text("[tests]\nnetwork = true\ntime_limit_minutes = 0\n")
+    (tmp_path / "code-analysis.toml").write_text("[tests]\nnetwork = true\ntime_limit_minutes = 0\n")
     runner = FakeRunner()
-    result = run_tests(run_acceptance(project), settings(tmp_path / "config"), tmp_path / "run", runner=runner,
+    result = run_tests(run_acceptance(project), settings(tmp_path / "code-analysis.toml"), tmp_path / "run", runner=runner,
                        now=lambda: NOW, out=lambda _: None)
     assert runner.calls[1]["network"] == "code-analysis-net" and runner.calls[1]["timeout"] is None
     assert runner.calls[3]["network"] == "code-analysis-net"  # the coverage run as well

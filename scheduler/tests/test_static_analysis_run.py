@@ -52,9 +52,9 @@ class FakeRunner:
         return CommandResult(tuple(command), self.exit_code, "text report", "Ran 433 rules on 5 files: 6 findings.", 1.0)
 
 
-def settings(tmp_path: Path, config_dir: Path) -> Settings:
+def settings(tmp_path: Path, config_file: Path) -> Settings:
     return Settings(projects_dir=None, host_home=None, ollama_base_url="http://x",
-                    output_dir=tmp_path / "results", config_dir=config_dir)
+                    output_dir=tmp_path / "results", config_file=config_file)
 
 
 def python_and_cpp_project(make_project) -> Path:
@@ -68,10 +68,10 @@ def python_and_cpp_project(make_project) -> Path:
     return project
 
 
-def analyse(project: Path, tmp_path: Path, runner, config_dir: Path | None = None):
+def analyse(project: Path, tmp_path: Path, runner, config_file: Path | None = None):
     """OpenGrep only (SonarQube: test_sonarqube.py), with opengrep-rules and 0xdea active by default."""
-    config_dir = config_dir or opengrep_config(tmp_path / "config")
-    return run_static_analysis(run_acceptance(project), settings(tmp_path, config_dir), tmp_path / "run",
+    config_file = config_file or opengrep_config(tmp_path / "config")
+    return run_static_analysis(run_acceptance(project), settings(tmp_path, config_file), tmp_path / "run",
                                runner=runner, now=lambda: NOW, out=lambda _: None, tools=["OpenGrep"])
 
 
@@ -126,7 +126,7 @@ def test_image_with_another_commit_of_a_rule_set(make_project, tmp_path):
     assert not result.complete
     assert runner.calls == []
     note = result.tool_runs[0].notes[-1]
-    assert "opengrep-rules in the image at another commit than in opengrep.toml" in note
+    assert "opengrep-rules in the image at another commit than in code-analysis.toml" in note
     assert "--profile tools build opengrep" in note
 
 
@@ -134,10 +134,10 @@ def test_image_with_another_commit_of_a_rule_set(make_project, tmp_path):
 def test_activated_rule_set_that_was_not_downloaded(make_project, tmp_path):
     # The default image only contains the rule sets active at build time.
     project = python_and_cpp_project(make_project)
-    config_dir = opengrep_config(tmp_path / "switched", ("semgrep-rules", "0xdea-semgrep-rules"))
+    config_file = opengrep_config(tmp_path / "switched", ("semgrep-rules", "0xdea-semgrep-rules"))
     versions = {key: value for key, value in IMAGE_VERSIONS.items() if key != "ruleset:semgrep-rules"}
     runner = FakeRunner(None, versions=versions)
-    result = analyse(project, tmp_path, runner, config_dir)
+    result = analyse(project, tmp_path, runner, config_file)
     assert not result.complete and runner.calls == []
     note = result.tool_runs[0].notes[-1]
     assert "semgrep-rules not in the image" in note
@@ -147,9 +147,9 @@ def test_activated_rule_set_that_was_not_downloaded(make_project, tmp_path):
 @requires_git
 def test_switching_to_semgrep_rules(make_project, tmp_path):
     project = python_and_cpp_project(make_project)
-    config_dir = opengrep_config(tmp_path / "switched", ("semgrep-rules", "0xdea-semgrep-rules"))
+    config_file = opengrep_config(tmp_path / "switched", ("semgrep-rules", "0xdea-semgrep-rules"))
     runner = FakeRunner(json.dumps({"results": [], "errors": [], "paths": {"scanned": []}}))
-    result = analyse(project, tmp_path, runner, config_dir)
+    result = analyse(project, tmp_path, runner, config_file)
     assert result.tool_runs[0].status is Status.OK
     assert "/opt/code-analysis/opengrep/rulesets/semgrep-rules/python" in runner.calls[0]["command"]
     assert [entry["name"] for entry in result.tool_runs[0].rulesets] == ["semgrep-rules", "0xdea-semgrep-rules"]
@@ -159,9 +159,9 @@ def test_switching_to_semgrep_rules(make_project, tmp_path):
 def test_language_without_rules_is_noted(make_project, tmp_path):
     project = make_project({"conanfile.txt": "[requires]\n", "main.cpp": "int main() {}\n"})
     commit_all(project)
-    config_dir = opengrep_config(tmp_path / "only-opengrep-rules", ("opengrep-rules",))
+    config_file = opengrep_config(tmp_path / "only-opengrep-rules", ("opengrep-rules",))
     runner = FakeRunner(None)
-    result = analyse(project, tmp_path, runner, config_dir)
+    result = analyse(project, tmp_path, runner, config_file)
     (run,) = result.tool_runs
     assert run.status is Status.SKIPPED and runner.calls == []
     assert run.notes == ["no rules for C++ in the active rule sets (opengrep-rules)"]
@@ -190,9 +190,9 @@ def test_missing_report_fails(make_project, tmp_path):
 def test_invalid_config_and_docker_errors(make_project, tmp_path):
     project = python_and_cpp_project(make_project)
     # A configuration problem stops only OpenGrep, not the step (SonarQube still runs).
-    result = analyse(project, tmp_path, FakeRunner(None), config_dir=tmp_path / "nothing")
+    result = analyse(project, tmp_path, FakeRunner(None), config_file=tmp_path / "code-analysis.toml")
     (run,) = result.tool_runs
-    assert run.status is Status.FAILED and "opengrep.toml is missing" in run.notes[0]
+    assert run.status is Status.FAILED and "code-analysis.toml is missing" in run.notes[0]
     assert result.errors == [] and not result.complete
     summary = json.loads((tmp_path / "run" / "step3-static-analysis" / "summary.json").read_text())
     assert summary["tools"][0]["status"] == "failed"

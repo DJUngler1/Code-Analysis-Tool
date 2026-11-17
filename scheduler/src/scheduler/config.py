@@ -7,13 +7,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from scheduler.tool_config import ConfigFileError, read_config
+
 DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434"
 # Network of the compose deployment; the tool containers join it.
 DEFAULT_TOOLS_NETWORK = "code-analysis-net"
 # SonarQube server of the compose deployment (service name in the network).
 DEFAULT_SONARQUBE_URL = "http://sonarqube:9000"
-# The repository's config/ folder, used when running from the source tree.
-REPOSITORY_CONFIG_DIR = Path(__file__).resolve().parents[3] / "config"
+# The repository's code-analysis.toml, used when running from the source tree.
+REPOSITORY_CONFIG_FILE = Path(__file__).resolve().parents[3] / "code-analysis.toml"
 
 
 @dataclass(frozen=True)
@@ -28,9 +30,9 @@ class Settings:
     # same path, so it can be passed on to the tool containers unchanged.
     output_dir: Path | None = None
     tools_network: str = DEFAULT_TOOLS_NETWORK
-    # Tool configuration (opengrep.toml). docker-compose.yml mounts the
-    # repository's config/ folder and sets CONFIG_DIR.
-    config_dir: Path | None = None
+    # The tool's configuration file (code-analysis.toml). docker-compose.yml
+    # mounts the repository's file and sets CONFIG_FILE.
+    config_file: Path | None = None
     # SonarQube (step 3): server URL for the scheduler and for the scanner
     # containers (the same inside the compose network), and the password of
     # the SonarQube user "admin" (docker/.env).
@@ -49,10 +51,13 @@ class Settings:
         env = os.environ if env is None else env
         projects_dir = env.get("PROJECTS_DIR", "").strip()
         host_home = env.get("HOST_HOME", "").strip()
-        ollama_base_url = env.get("OLLAMA_BASE_URL", "").strip() or DEFAULT_OLLAMA_BASE_URL
+        config_file = env.get("CONFIG_FILE", "").strip()
+        config_path = Path(config_file) if config_file else _repository_config_file()
+        # OLLAMA_BASE_URL (docker/.env) overrides [llm] base_url of the configuration file.
+        ollama_base_url = env.get("OLLAMA_BASE_URL", "").strip() or _configured_base_url(config_path) \
+            or DEFAULT_OLLAMA_BASE_URL
         output_dir = env.get("OUTPUT_DIR", "").strip()
         tools_network = env.get("TOOLS_NETWORK", "").strip() or DEFAULT_TOOLS_NETWORK
-        config_dir = env.get("CONFIG_DIR", "").strip()
         sonarqube_url = env.get("SONARQUBE_URL", "").strip() or DEFAULT_SONARQUBE_URL
         return cls(
             projects_dir=Path(projects_dir).resolve() if projects_dir else None,
@@ -60,7 +65,7 @@ class Settings:
             ollama_base_url=ollama_base_url.rstrip("/"),
             output_dir=Path(output_dir).resolve() if output_dir else None,
             tools_network=tools_network,
-            config_dir=Path(config_dir) if config_dir else _repository_config_dir(),
+            config_file=config_path,
             sonarqube_url=sonarqube_url.rstrip("/"),
             sonarqube_scanner_url=(env.get("SONARQUBE_SCANNER_URL", "").strip().rstrip("/") or None),
             sonarqube_admin_password=env.get("SONARQUBE_ADMIN_PASSWORD") or None,
@@ -68,5 +73,15 @@ class Settings:
         )
 
 
-def _repository_config_dir() -> Path | None:
-    return REPOSITORY_CONFIG_DIR if REPOSITORY_CONFIG_DIR.is_dir() else None
+def _repository_config_file() -> Path | None:
+    return REPOSITORY_CONFIG_FILE if REPOSITORY_CONFIG_FILE.is_file() else None
+
+
+def _configured_base_url(path: Path | None) -> str | None:
+    """[llm] base_url, if the file has a valid one; errors are reported by the step that reads [llm]."""
+    try:
+        llm = read_config(path).get("llm", {})
+    except ConfigFileError:
+        return None
+    value = llm.get("base_url") if isinstance(llm, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else None

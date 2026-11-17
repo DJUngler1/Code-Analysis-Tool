@@ -1,7 +1,8 @@
-"""OpenGrep's rule sets (config/opengrep.toml): which rules run for which language.
+"""OpenGrep's rule sets ([opengrep] in code-analysis.toml): which rules run for which language.
 
-`[opengrep] rulesets` selects the rule sets a run uses. Only these active rule
-sets are downloaded into the image code-analysis/opengrep when it is built
+`[opengrep] active` selects the rule sets a run uses; `[opengrep.rulesets.<name>]`
+defines them. Only the active rule sets are downloaded into the image
+code-analysis/opengrep when it is built
 (docker/static-analysis/opengrep/fetch_rulesets.py); activating another one
 needs a rebuild.
 """
@@ -9,14 +10,13 @@ needs a rebuild.
 from __future__ import annotations
 
 import re
-import tomllib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from scheduler.acceptance.languages import SUPPORTED_LANGUAGES
+from scheduler.tool_config import ConfigFileError, read_config, section
 
-CONFIG_FILE = "opengrep.toml"
 # Where the image keeps the rule sets: <IMAGE_RULESETS_DIR>/<name>/<folder>.
 IMAGE_RULESETS_DIR = PurePosixPath("/opt/code-analysis/opengrep/rulesets")
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -24,7 +24,7 @@ _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
 
 class RulesetError(Exception):
-    """config/opengrep.toml is missing or invalid."""
+    """The [opengrep] section of code-analysis.toml is missing or invalid."""
 
 
 @dataclass(frozen=True)
@@ -55,27 +55,23 @@ class OpenGrepConfig:
     active: tuple[RuleSet, ...]
 
 
-def load_config(config_dir: Path | None) -> OpenGrepConfig:
-    if config_dir is None:
-        raise RulesetError("no configuration folder: set CONFIG_DIR (docker-compose.yml mounts config/).")
-    path = config_dir / CONFIG_FILE
+def load_config(path: Path | None) -> OpenGrepConfig:
+    if path is None:
+        raise RulesetError("no configuration file: set CONFIG_FILE (docker-compose.yml mounts code-analysis.toml).")
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RulesetError(f"{path} is missing.") from exc
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise RulesetError(f"{path} cannot be read: {exc}") from exc
-
-    defined = data.get("rulesets")
+        opengrep = section(read_config(path), path, "opengrep")
+    except ConfigFileError as exc:
+        raise RulesetError(str(exc)) from exc
+    defined = opengrep.get("rulesets")
     if not isinstance(defined, dict) or not defined:
-        raise RulesetError(f"{path}: no rule set defined ([rulesets.<name>]).")
-    names = (data.get("opengrep") or {}).get("rulesets")
+        raise RulesetError(f"{path}: no rule set defined ([opengrep.rulesets.<name>]).")
+    names = opengrep.get("active")
     if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
-        raise RulesetError(f"{path}: [opengrep] rulesets must list the active rule sets, e.g. [\"opengrep-rules\"].")
+        raise RulesetError(f"{path}: [opengrep] active must list the active rule sets, e.g. [\"opengrep-rules\"].")
     unknown = [name for name in names if name not in defined]
     if unknown:
         raise RulesetError(
-            f"{path}: unknown rule set(s) in [opengrep] rulesets: {', '.join(unknown)} "
+            f"{path}: unknown rule set(s) in [opengrep] active: {', '.join(unknown)} "
             f"(defined: {', '.join(defined)})."
         )
     active = tuple(_ruleset(path, name, defined[name]) for name in dict.fromkeys(names))

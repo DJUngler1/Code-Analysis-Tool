@@ -71,7 +71,7 @@ def finish_mutation(ctx: TestContext, mutation: MutationRun, job: Job, mutants: 
     if result.timed_out:
         minutes = ctx.config.mutation.time_limit_minutes
         mutation.status = Status.PARTIAL
-        mutation.notes.append(f"time limit of {minutes} minutes reached (config/tests.toml): "
+        mutation.notes.append(f"time limit of {minutes} minutes reached (code-analysis.toml, [tests.mutation]): "
                               + (f"{len(mutants)} mutants were evaluated before" if mutants
                                  else f"{what} wrote no results before"))
     elif mutants is None:

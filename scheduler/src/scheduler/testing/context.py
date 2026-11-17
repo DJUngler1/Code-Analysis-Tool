@@ -45,7 +45,7 @@ class TestContext:
 
         online: downloading dependencies, always with network and the
         download time limit. Otherwise a test run: with network only if
-        config/tests.toml allows it, and with its time limit ("tests"), the
+        code-analysis.toml allows it, and with its time limit ("tests"), the
         mutation time limit ("mutation") or the given seconds (None: no limit).
         """
         network = self.settings.tools_network if online or self.config.network else "none"

@@ -174,7 +174,7 @@ class MutationRun:
     version: str | None = None
     commands: list[CommandResult] = field(default_factory=list)
     duration_seconds: float = 0.0
-    mode: str = "sample"  # from config/tests.toml
+    mode: str = "sample"  # from code-analysis.toml
     files: list[str] = field(default_factory=list)  # the source files mutated
     sampled: bool = False  # True if `files` is a sample of the candidates
     candidates: int = 0  # number of files the sample was drawn from

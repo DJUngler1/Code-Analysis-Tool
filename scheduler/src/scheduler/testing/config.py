@@ -1,16 +1,14 @@
-"""Settings of step 5 from config/tests.toml (read at every run)."""
+"""Settings of step 5 from code-analysis.toml, [tests] and [tests.mutation] (read at every run)."""
 
 from __future__ import annotations
 
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-CONFIG_FILE = "tests.toml"
-
+from scheduler.tool_config import ConfigFileError, flag, read_config, section, whole_number
 
 class ConfigError(Exception):
-    """config/tests.toml is missing or invalid."""
+    """The [tests] section of code-analysis.toml is invalid."""
 
 
 MODES = ("sample", "full")
@@ -42,40 +40,23 @@ class TestsConfig:
         return self.time_limit_minutes * 60 if self.time_limit_minutes else None
 
 
-def load_config(config_dir: Path | None) -> TestsConfig:
-    """The settings; the defaults when there is no config folder (outside Docker, tests)."""
-    if config_dir is None:
-        return TestsConfig()
-    path = config_dir / CONFIG_FILE
+def load_config(path: Path | None) -> TestsConfig:
+    """[tests] and [tests.mutation] of code-analysis.toml; the defaults without a file (outside Docker, tests)."""
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ConfigError(f"{path} cannot be read: {exc}") from exc
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"{path} is not valid TOML: {exc}") from exc
-    tests = data.get("tests", {})
-    if not isinstance(tests, dict):
-        raise ConfigError(f"{path}: [tests] must be a table")
-    network = tests.get("network", TestsConfig.network)
-    if not isinstance(network, bool):
-        raise ConfigError(f"{path}: tests.network must be true or false")
-    minutes = _count(tests, "time_limit_minutes", TestsConfig.time_limit_minutes, path, "tests")
-    mutation = data.get("mutation", {})
-    if not isinstance(mutation, dict):
-        raise ConfigError(f"{path}: [mutation] must be a table")
-    mode = mutation.get("mode", MutationConfig.mode)
-    if mode not in MODES:
-        raise ConfigError(f"{path}: mutation.mode must be \"sample\" or \"full\"")
-    sample_files = _count(mutation, "sample_files", MutationConfig.sample_files, path, "mutation", minimum=1)
-    seed = _count(mutation, "seed", MutationConfig.seed, path, "mutation")
-    mutation_minutes = _count(mutation, "time_limit_minutes", MutationConfig.time_limit_minutes, path, "mutation")
+        data = read_config(path)
+        tests = section(data, path, "tests")
+        mutation = section(data, path, "tests.mutation")
+        network = flag(tests, "network", TestsConfig.network, path, "tests")
+        minutes = whole_number(tests, "time_limit_minutes", TestsConfig.time_limit_minutes, path, "tests")
+        mode = mutation.get("mode", MutationConfig.mode)
+        if mode not in MODES:
+            raise ConfigFileError(f"{path}: tests.mutation.mode must be \"sample\" or \"full\".")
+        sample_files = whole_number(mutation, "sample_files", MutationConfig.sample_files, path, "tests.mutation",
+                                    minimum=1)
+        seed = whole_number(mutation, "seed", MutationConfig.seed, path, "tests.mutation")
+        mutation_minutes = whole_number(mutation, "time_limit_minutes", MutationConfig.time_limit_minutes, path,
+                                        "tests.mutation")
+    except ConfigFileError as exc:
+        raise ConfigError(str(exc)) from exc
     return TestsConfig(network=network, time_limit_minutes=minutes,
                        mutation=MutationConfig(mode, sample_files, seed, mutation_minutes))
-
-
-def _count(table: dict, key: str, default: int, path: Path, section: str, *, minimum: int = 0) -> int:
-    value = table.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        hint = ", 0 for no limit" if key == "time_limit_minutes" else ""
-        raise ConfigError(f"{path}: {section}.{key} must be a whole number of at least {minimum}{hint}")
-    return value

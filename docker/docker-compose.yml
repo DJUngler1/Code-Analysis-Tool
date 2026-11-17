@@ -40,7 +40,7 @@ services:
       PROJECTS_DIR: ${PROJECTS_DIR}
       OUTPUT_DIR: ${OUTPUT_DIR}
       HOST_HOME: ${HOME}
-      CONFIG_DIR: /app/config
+      CONFIG_FILE: /app/code-analysis.toml
       SONARQUBE_URL: http://sonarqube:9000
       # Without it, step 3 reports SonarQube as failed (see docker/.env.example).
       SONARQUBE_ADMIN_PASSWORD: ${SONARQUBE_ADMIN_PASSWORD:-}
@@ -60,12 +60,13 @@ services:
         target: ${OUTPUT_DIR}
         bind:
           create_host_path: true
-      # Tool configuration (config/opengrep.toml: OpenGrep's rule sets;
-      # config/tests.toml: network, time limits and mutation scope of the tests), read at each
-      # run: changes need no rebuild of the scheduler.
+      # The tool's configuration file (code-analysis.toml: OpenGrep rule sets,
+      # tests, LLM evaluation), read at each run: changes need no rebuild of
+      # the scheduler. Editors that save by replacing the file can leave the
+      # container with the old version; then restart it (up -d).
       - type: bind
-        source: ../config
-        target: /app/config
+        source: ../code-analysis.toml
+        target: /app/code-analysis.toml
         read_only: true
       # Starts the tool containers. Project code (build scripts, analyzers)
       # only runs in those containers, which do not get the socket.
@@ -108,7 +109,7 @@ services:
     image: code-analysis/lint-rust:latest
 
   # Static analysis (step 3). OpenGrep with the rule sets of
-  # config/opengrep.toml built in; rebuild after changing rule set definitions.
+  # [opengrep] of code-analysis.toml built in; rebuild after changing rule sets.
   # Definition: docs/staticAnalysis/README.md
   opengrep:
     profiles: ["tools"]

@@ -149,7 +149,7 @@ class FakeRunner:
 
 def settings(tmp_path: Path, password: str | None = PASSWORD) -> Settings:
     return Settings(projects_dir=None, host_home=None, ollama_base_url="x", output_dir=tmp_path / "results",
-                    config_dir=opengrep_config(tmp_path / "config"), sonarqube_admin_password=password)
+                    config_file=opengrep_config(tmp_path / "config"), sonarqube_admin_password=password)
 
 
 def analyse(project, tmp_path, server, runner, password=PASSWORD):

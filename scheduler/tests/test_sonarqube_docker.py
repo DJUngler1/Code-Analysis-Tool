@@ -80,7 +80,7 @@ def project(workspace: Path, files: dict[str, str]) -> Path:
 def analyse(root: Path, workspace: Path, server):
     runner, password, api = server
     settings = Settings(projects_dir=None, host_home=None, ollama_base_url="x", output_dir=workspace / "results",
-                        config_dir=opengrep_config(workspace / "config"), sonarqube_url=API_URL,
+                        config_file=opengrep_config(workspace / "config"), sonarqube_url=API_URL,
                         sonarqube_scanner_url="http://sonarqube:9000", sonarqube_admin_password=password)
     acceptance = run_acceptance(root)
     assert acceptance.accepted, acceptance.message

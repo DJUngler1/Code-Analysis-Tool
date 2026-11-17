@@ -6,6 +6,10 @@ import re
 from pathlib import Path
 
 from scheduler.config import Settings
+from scheduler.evaluation.items import DEPENDENCIES_DIR, LINT_DIR, STATIC_DIR, TESTS_DIR
+
+# Contents of a run folder (<OUTPUT_DIR>/<project>/<date_time>/), one is enough.
+RUN_FOLDER_MARKERS = ("run.json", LINT_DIR, STATIC_DIR, DEPENDENCIES_DIR, TESTS_DIR)
 
 
 class PathError(ValueError):
@@ -53,4 +57,24 @@ def resolve_project_path(raw: str, settings: Settings) -> Path:
         raise PathError(f"{path} does not exist.")
     if not path.is_dir():
         raise PathError(f"{path} is not a directory.")
+    return path
+
+
+def resolve_run_folder(raw: str, settings: Settings) -> Path:
+    """Return the results folder of an earlier run (for --evaluate) or raise PathError."""
+    if not raw.strip():
+        raise PathError("No run folder entered.")
+    path = normalize(raw, settings.host_home)
+    if not path.is_absolute():
+        raise PathError(f"'{path}' is not an absolute path. Please enter the full path of the run folder, "
+                        "e.g. /Users/me/code-analysis-results/my-app/2026-01-31_120000Z.")
+    path = path.resolve()
+    if settings.output_dir is not None and not path.is_relative_to(settings.output_dir):
+        raise PathError(f"{path} is outside the results folder {settings.output_dir} (OUTPUT_DIR in docker/.env). "
+                        "Only folders below it are visible to the tool.")
+    if not path.is_dir():
+        raise PathError(f"{path} does not exist or is not a folder.")
+    if not any((path / marker).exists() for marker in RUN_FOLDER_MARKERS):
+        raise PathError(f"{path} is not the folder of a run: it has no run.json and no step folders "
+                        "(expected <OUTPUT_DIR>/<project>/<date_time>).")
     return path

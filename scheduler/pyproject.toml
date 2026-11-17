@@ -18,7 +18,14 @@ code-analysis = "scheduler.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The prompts of step 6 are read at run time (importlib.resources).
+[tool.setuptools.package-data]
+"scheduler.evaluation" = ["prompts/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["docker: needs Docker and the tool images; run with `pytest -m docker`"]
-addopts = "-m 'not docker'"
+markers = [
+    "docker: needs Docker and the tool images; run with `pytest -m docker`",
+    "llm: needs Ollama with the models of code-analysis.toml; run with `pytest -m llm`",
+]
+addopts = "-m 'not docker and not llm'"

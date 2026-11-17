@@ -48,12 +48,12 @@ It runs in the project folder with `SEMGREP_R2C_INTERNAL_EXPLICIT_SEMGREPIGNORE=
 |---|---|
 | `ok` | OpenGrep finished and wrote its report |
 | `partial` | As `ok`, but some files could not (fully) be analysed, e.g. syntax errors or timeouts (listed in the notes) |
-| `failed` | Non-zero exit code or no report, or the image doesn't match `config/opengrep.toml` (rebuild the image) |
+| `failed` | Non-zero exit code or no report, or the image doesn't match `[opengrep]` in `code-analysis.toml` (rebuild the image) |
 | `skipped` | No active rule set covers any language of the project |
 
 ## Rule sets
 
-OpenGrep ships no rules. The rule sets are defined in [`config/opengrep.toml`](../../config/opengrep.toml): each is a git repository at a fixed commit, with the rule folders that cover each language of step 1. `rulesets` under `[opengrep]` lists the active ones.
+OpenGrep ships no rules. The rule sets are defined in `[opengrep.rulesets.<name>]` of [`code-analysis.toml`](../../code-analysis.toml): each is a git repository at a fixed commit, with the rule folders that cover each language of step 1. `active` under `[opengrep]` lists the active ones.
 
 | Rule set | Repository | Languages | License |
 |---|---|---|---|
@@ -68,7 +68,7 @@ OpenGrep ships no rules. The rule sets are defined in [`config/opengrep.toml`](.
 
 Only the active rule sets are downloaded into the image, when it is built.
 
-- **Switch:** change `rulesets` in `config/opengrep.toml`, then rebuild the image:
+- **Switch:** change `active` under `[opengrep]` in `code-analysis.toml`, then rebuild the image:
   ```bash
   docker compose -f docker/docker-compose.yml --profile tools build opengrep
   ```

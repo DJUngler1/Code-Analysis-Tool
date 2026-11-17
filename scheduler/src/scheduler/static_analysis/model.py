@@ -11,7 +11,7 @@ from scheduler.linting.model import CommandResult, Status
 @dataclass(frozen=True)
 class AnalysisFinding:
     tool: str
-    ruleset: str | None  # rule set of config/opengrep.toml the rule comes from
+    ruleset: str | None  # rule set of code-analysis.toml ([opengrep]) the rule comes from
     rule: str  # rule id within the rule set, e.g. "python.flask.security.injection.subprocess-injection"
     severity: str  # "error", "warning" or "note", as in step 2
     tool_severity: str  # as the tool reports it, e.g. "ERROR", "WARNING", "INFO"

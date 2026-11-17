@@ -1,4 +1,4 @@
-"""config/opengrep.toml: active rule sets and their folders per language."""
+"""[opengrep] of code-analysis.toml: active rule sets and their folders per language."""
 
 import importlib.util
 import re
@@ -15,12 +15,12 @@ COMMIT = "f1d2b562b414783763fd02a6ed2736eaed622efa"
 
 
 def write_config(tmp_path: Path, text: str) -> Path:
-    (tmp_path / "opengrep.toml").write_text(text)
-    return tmp_path
+    (tmp_path / "code-analysis.toml").write_text(text)
+    return tmp_path / "code-analysis.toml"
 
 
 def test_repository_config(tmp_path):
-    load_config(REPOSITORY / "config")  # the user's current choice is valid
+    load_config(REPOSITORY / "code-analysis.toml")  # the user's current choice is valid
     config = load_config(opengrep_config(tmp_path))
     assert [ruleset.name for ruleset in config.active] == list(DEFAULT_RULESETS)
     opengrep_rules, oxdea = config.active
@@ -33,11 +33,11 @@ def test_repository_config(tmp_path):
 
 def test_every_defined_rule_set_can_be_activated(tmp_path):
     # Switching must work for every rule set the image contains.
-    text = (REPOSITORY / "config" / "opengrep.toml").read_text()
-    names = list(tomllib.loads(text)["rulesets"])
+    text = (REPOSITORY / "code-analysis.toml").read_text()
+    names = list(tomllib.loads(text)["opengrep"]["rulesets"])
     assert "semgrep-rules" in names
     for name in names:
-        switched = re.sub(r"(?m)^rulesets = \[.*\]$", f'rulesets = ["{name}"]', text)
+        switched = re.sub(r"(?m)^active = \[.*\]$", f'active = ["{name}"]', text)
         assert [ruleset.name for ruleset in load_config(write_config(tmp_path, switched)).active] == [name]
 
 
@@ -45,17 +45,17 @@ def test_every_defined_rule_set_can_be_activated(tmp_path):
     ("text", "message"),
     [
         ("", "no rule set defined"),
-        (f'[rulesets.a]\nrepository = "r"\ncommit = "{COMMIT}"\nfolders = {{ C = ["c"] }}\n',
+        (f'[opengrep.rulesets.a]\nrepository = "r"\ncommit = "{COMMIT}"\nfolders = {{ C = ["c"] }}\n',
          "must list the active rule sets"),
-        (f'[opengrep]\nrulesets = ["b"]\n[rulesets.a]\nrepository = "r"\ncommit = "{COMMIT}"\n'
-         'folders = { C = ["c"] }\n', "unknown rule set(s) in [opengrep] rulesets: b (defined: a)"),
-        ('[opengrep]\nrulesets = ["a"]\n[rulesets.a]\nrepository = "r"\ncommit = "main"\nfolders = { C = ["c"] }\n',
-         "full 40-character commit hash"),
-        (f'[opengrep]\nrulesets = ["a"]\n[rulesets.a]\nrepository = "r"\ncommit = "{COMMIT}"\n'
+        (f'[opengrep]\nactive = ["b"]\n[opengrep.rulesets.a]\nrepository = "r"\ncommit = "{COMMIT}"\n'
+         'folders = { C = ["c"] }\n', "unknown rule set(s) in [opengrep] active: b (defined: a)"),
+        ('[opengrep]\nactive = ["a"]\n[opengrep.rulesets.a]\nrepository = "r"\ncommit = "main"\n'
+         'folders = { C = ["c"] }\n', "full 40-character commit hash"),
+        (f'[opengrep]\nactive = ["a"]\n[opengrep.rulesets.a]\nrepository = "r"\ncommit = "{COMMIT}"\n'
          'folders = { Go = ["go"] }\n', "unknown language 'Go'"),
-        (f'[opengrep]\nrulesets = ["a"]\n[rulesets.a]\nrepository = "r"\ncommit = "{COMMIT}"\n'
+        (f'[opengrep]\nactive = ["a"]\n[opengrep.rulesets.a]\nrepository = "r"\ncommit = "{COMMIT}"\n'
          'folders = { C = ["../c"] }\n', "must stay inside the repository"),
-        ("[opengrep\n", "cannot be read"),
+        ("[opengrep\n", "is not valid TOML"),
     ],
 )
 def test_invalid_config(tmp_path, text, message):
@@ -64,9 +64,9 @@ def test_invalid_config(tmp_path, text, message):
 
 
 def test_missing_config(tmp_path):
-    with pytest.raises(RulesetError, match="opengrep.toml is missing"):
-        load_config(tmp_path)
-    with pytest.raises(RulesetError, match="CONFIG_DIR"):
+    with pytest.raises(RulesetError, match="code-analysis.toml is missing"):
+        load_config(tmp_path / "code-analysis.toml")
+    with pytest.raises(RulesetError, match="CONFIG_FILE"):
         load_config(None)
 
 
@@ -76,14 +76,15 @@ def test_build_script_accepts_the_repository_config(tmp_path):
     spec = importlib.util.spec_from_file_location("fetch_rulesets", script)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    rulesets = tomllib.loads((REPOSITORY / "config" / "opengrep.toml").read_text())["rulesets"]
+    rulesets = tomllib.loads((REPOSITORY / "code-analysis.toml").read_text())["opengrep"]["rulesets"]
     assert all(module.check_definition(name, table) is None for name, table in rulesets.items())
-    # Only active rule sets are downloaded: semgrep-rules only after activating it.
-    config = tomllib.loads((opengrep_config(tmp_path) / "opengrep.toml").read_text())
+    # Only active rule sets are downloaded: semgrep-rules only after activating it. The build
+    # passes the [opengrep] table (as JSON).
+    config = tomllib.loads(opengrep_config(tmp_path).read_text())["opengrep"]
     assert module.active_rulesets(config) == list(DEFAULT_RULESETS)
     assert "semgrep-rules" not in module.active_rulesets(config)
     with pytest.raises(ValueError, match="unknown rule set"):
-        module.active_rulesets({"opengrep": {"rulesets": ["x"]}, "rulesets": {}})
+        module.active_rulesets({"active": ["x"], "rulesets": {}})
     assert module.check_definition("x", {"repository": "r", "commit": "main", "folders": {"C": ["c"]}})
     assert module.is_rule_file(Path("python/flask/a.yaml"))
     assert not module.is_rule_file(Path("python/flask/a.test.yaml"))
