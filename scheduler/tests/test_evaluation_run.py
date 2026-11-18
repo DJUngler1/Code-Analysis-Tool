@@ -3,11 +3,13 @@
 import json
 
 import pytest
-from evaluation_data import DECISION_MODEL, REPORT_MODEL, FakeClient, FakeOllama, add_quality_findings, make_run
+from evaluation_data import (DECISION_MODEL, INSTALLED, REPORT_MODEL, FakeClient, FakeOllama, add_quality_findings,
+                             add_security_groups, make_run)
 
 from scheduler.config import Settings
 from scheduler.evaluation import run_evaluation
 from scheduler.evaluation.audit import language_of, main as audit_main, write_audit
+from scheduler.evaluation.config import AREAS
 from scheduler.linting import Status
 
 from conftest import REPOSITORY
@@ -18,11 +20,11 @@ def settings_for(config_file=REPOSITORY / "code-analysis.toml"):
                     config_file=config_file)
 
 
-def evaluate(run, fake=None, *, settings=None, client=None):
+def evaluate(run, fake=None, *, settings=None, client=None, resume=False):
     fake = fake or FakeOllama()
     client = client or FakeClient(fake)
     lines = []
-    result = run_evaluation(run, settings or settings_for(), client=client, out=lines.append)
+    result = run_evaluation(run, settings or settings_for(), resume=resume, client=client, out=lines.append)
     return result, fake, "\n".join(lines)
 
 
@@ -221,7 +223,7 @@ def test_audit_content(tmp_path):
     for expected in ("# Code analysis audit: project", "| 6 – LLM evaluation | complete |",
                      "- Security: 3 REAL findings (1 error, 1 high, 1 medium) of 6 findings; 1 filtered, "
                      "2 duplicates merged.",
-                     "| E-001 | high | Title of E-001 | lodash@4.17.20 | Fix E-001. |",
+                     "| E-001 | high | 1 | Title of E-001 | lodash@4.17.20 | Fix E-001. |",
                      "<summary>Filtered (1)</summary>", "```diff\n@@ -1,3 +1,3 @@",
                      "| Python (requirements.txt) | coverage.py | ok | 60.0% | – |",
                      "| Security | E-004 | NOISE | 0.40 (low confidence) | Title of E-004 | – |",
@@ -239,6 +241,33 @@ def test_audit_content(tmp_path):
     assert [entry["id"] for entry in audit["review"]] == ["E-004", "G-003", "E-001"]
 
 
+def test_security_groups_in_the_audit(tmp_path):
+    run = make_run(tmp_path)
+    add_security_groups(run)
+    result, fake, _ = evaluate(run)
+    assert result.complete, result.errors
+    text = (run / "audit.md").read_text()
+    for expected in ("### REAL findings (9)",
+                     "| E-004 | medium | 3 | Title of E-004 | tomcat-embed-core@9.0.1 | Fix E-004. |",
+                     "| E-006 | note | 2 | Title of E-006 | src/app.py:1 (+1 more) | Fix E-006. |",
+                     # Every finding of a group stays in the audit, as a collapsible list.
+                     "<summary>E-004 – tomcat-embed-core: 3 findings</summary>",
+                     "- GHSA-aaaa-0000-0001 (medium): 9.0.1 → 9.0.40",
+                     "<summary>E-006 – opengrep / c.raptor-typos: 2 findings in 1 file</summary>",
+                     "- `src/app.py`: 1, 3",
+                     "<summary>Filtered (3)</summary>",
+                     "#### Locations of the filtered groups",
+                     "<summary>E-008 – opengrep / c.raptor-typos: 2 findings in 1 file</summary>",
+                     "- `tests/test_app.py`: 1, 3",
+                     # The fake decides tests/ with low confidence: both findings of the group.
+                     "| Security | E-008 | NOISE | 2 / 2 low confidence | Title of E-008 | – |"):
+        assert expected in text, expected
+    sent = [body["messages"][1]["content"] for endpoint, body in fake.requests
+            if endpoint == "/api/chat" and "security analyst" in body["messages"][0]["content"]]
+    assert any('"id": "E-008",\n  "label": "NOISE",\n  "count": 2,\n  "low_confidence": true,\n'
+               '  "low_confidence_findings": 2' in content for content in sent)
+
+
 def test_a_second_evaluation_replaces_the_first(tmp_path):
     run = make_run(tmp_path)
     evaluate(run)
@@ -250,3 +279,182 @@ def test_a_second_evaluation_replaces_the_first(tmp_path):
     assert sorted(path.name for path in (step / "code_quality" / "requests").iterdir()) == [
         "001-decision.json", "002-report.json", "003-report.json"]
     assert "Not evaluated." in (run / "audit.md").read_text()
+
+
+# --- --resume: the decisions of the earlier evaluation are reused, the reports written again ---
+
+
+def decision_requests(fake):
+    return [body for endpoint, body in fake.requests if endpoint == "/v1/systemone"]
+
+
+def logs(step, area, kind):
+    return sorted(path.name for path in (step / area / "requests").glob(f"*-{kind}.json"))
+
+
+def test_resume_reuses_the_decisions_after_the_reports_failed(tmp_path):
+    config = tmp_path / "code-analysis.toml"
+    config.write_text("[llm.report]\nretries = 0\n")
+    run = make_run(tmp_path)
+    failing = FakeOllama()
+    failing.fail.add("/api/chat")
+    first, _, _ = evaluate(run, failing, client=FakeClient(failing, max_failures=3), settings=settings_for(config))
+    assert not first.complete
+    step = run / "step6-llm-evaluation"
+    started = read(step / "summary.json")["started"]
+    decisions = {area: (step / area / "decisions.json").read_text() for area in AREAS}
+    kept = {area: logs(step, area, "decision") for area in AREAS}
+    assert logs(step, "security", "report")  # the failed report requests of the first evaluation
+
+    result, fake, out = evaluate(run, settings=settings_for(config), resume=True)
+    assert result.complete, result.errors
+    assert decision_requests(fake) == []  # nothing labeled again
+    assert "Labeling with" not in out and f"security: reused (evaluation started {started})" in out
+    for area in AREAS:
+        assert (step / area / "decisions.json").read_text() == decisions[area]
+        assert logs(step, area, "decision") == kept[area]
+        reports = logs(step, area, "report")  # only the new ones, numbered after the kept requests
+        assert reports and (not kept[area] or reports[0] > kept[area][-1])
+    summary = read(step / "summary.json")
+    security = next(area for area in summary["areas"] if area["area"] == "security")
+    assert security["status"] == "ok" and security["decisions_reused_from"] == started
+    assert security["decisions"]["labels"] == {"REAL": 3, "NOISE": 1, "DUPLICATE": 2}
+    assert read(step / "security" / "report.json")["texts_missing"] == 0
+    assert (f"- Decisions (Security, Code quality, Test quality) taken over from the evaluation started {started}"
+            in (run / "audit.md").read_text())
+
+
+def test_resume_of_an_evaluation_without_decisions_info(tmp_path):
+    run = make_run(tmp_path)
+    evaluate(run)
+    step = run / "step6-llm-evaluation"
+    started = read(step / "summary.json")["started"]
+    for area in AREAS:  # as written before decisions_info.json existed: the facts are only in summary.json
+        (step / area / "decisions_info.json").unlink()
+    result, fake, _ = evaluate(run, resume=True)
+    assert result.complete and decision_requests(fake) == []
+    assert read(step / "security" / "decisions_info.json")["started"] == started
+
+
+def changed_config(tmp_path, old, new):
+    """The repository's code-analysis.toml with one value changed."""
+    text = (REPOSITORY / "code-analysis.toml").read_text()
+    assert old in text
+    config = tmp_path / "code-analysis.toml"
+    config.write_text(text.replace(old, new, 1))
+    return settings_for(config)
+
+
+def test_resume_labels_again_when_the_decision_settings_changed(tmp_path):
+    run = make_run(tmp_path)
+    evaluate(run)
+    settings = changed_config(tmp_path, "review_confidence = 0.6", "review_confidence = 0.5")
+    result, fake, out = evaluate(run, settings=settings, resume=True)
+    assert result.complete and decision_requests(fake)
+    assert "security: labeled again: [llm.decision] review_confidence changed since" in out
+    step = run / "step6-llm-evaluation"
+    assert logs(step, "security", "decision")[0] == "001-decision.json"  # the earlier requests are removed
+    summary = read(step / "summary.json")
+    assert read(step / "security" / "decisions_info.json")["started"] == summary["started"]
+    assert all(area["decisions_reused_from"] is None for area in summary["areas"])
+
+
+def test_resume_labels_again_when_the_questions_changed(tmp_path):
+    run = make_run(tmp_path)
+    evaluate(run)
+    settings = changed_config(tmp_path, "message_chars = 300", "message_chars = 10")
+    result, fake, out = evaluate(run, settings=settings, resume=True)
+    assert result.complete and decision_requests(fake)
+    assert "security: labeled again: the questions changed since" in out
+
+
+def test_resume_labels_again_with_another_decision_model(tmp_path):
+    run = make_run(tmp_path)
+    evaluate(run)
+    other = FakeOllama(installed=tuple(reversed(INSTALLED)))  # same name, another digest
+    result, fake, out = evaluate(run, other, resume=True)
+    assert result.complete and decision_requests(fake)
+    assert "security: labeled again: they were made by another decision model" in out
+
+
+def test_resume_without_an_earlier_evaluation_labels_everything(tmp_path):
+    run = make_run(tmp_path)
+    result, fake, out = evaluate(run, resume=True)
+    assert result.complete and decision_requests(fake)
+    assert "security: labeled again: there are no complete decisions of an earlier evaluation" in out
+
+
+def test_a_failed_resume_keeps_the_decisions(tmp_path):
+    run = make_run(tmp_path)
+    evaluate(run)
+    failed, _, _ = evaluate(run, client=FakeClient(FakeOllama(), reachable=False), resume=True)
+    assert not failed.complete
+    result, fake, _ = evaluate(run, resume=True)
+    assert result.complete and decision_requests(fake) == []
+
+
+def test_resume_removes_areas_that_are_skipped_now(tmp_path):
+    run = make_run(tmp_path)
+    evaluate(run)
+    settings = changed_config(tmp_path, 'areas = ["security", "code_quality", "test_quality"]',
+                              'areas = ["code_quality"]')
+    result, fake, _ = evaluate(run, settings=settings, resume=True)
+    assert result.complete and decision_requests(fake) == []
+    step = run / "step6-llm-evaluation"
+    assert sorted(path.name for path in step.iterdir()) == ["code_quality", "summary.json"]
+
+
+# --- threat model (written into the run folder before step 2): security only ---
+
+
+THREAT_MODEL = "# Threat model\n\n## Untrusted inputs (trust boundaries)\n\n- Players send image files."
+
+
+def with_threat_model(run, text=THREAT_MODEL):
+    from scheduler.threat_model import ThreatModel, copy_to_run
+
+    copy_to_run(run, ThreatModel(text, "results", run / "threat-model.md", "2026-11-18T08:00:00", "abc123def4567"))
+
+
+def test_the_threat_model_reaches_only_the_security_prompts(tmp_path):
+    run = make_run(tmp_path)
+    with_threat_model(run)
+    result, fake, _ = evaluate(run)
+    assert result.complete, result.errors
+    states = [body["state"] for endpoint, body in fake.requests if endpoint == "/v1/systemone"]
+    security = [state for state in states if "security analysis" in state]
+    assert security and all("Players send image files." in state for state in security)
+    assert all("Players send image files." not in state for state in states if state not in security)
+    systems = [body["messages"][0]["content"] for endpoint, body in fake.requests if endpoint == "/api/chat"]
+    assert any("security analyst" in system and "Players send image files." in system for system in systems)
+    assert all("Players send image files." not in system for system in systems if "security analyst" not in system)
+    step = run / "step6-llm-evaluation"
+    info = read(step / "summary.json")["threat_model"]
+    assert info["source"] == "results" and info["sha256"] == "abc123def4567" and not info["shortened"]
+    assert read(step / "security" / "items.json")["threat_model"].startswith("# Threat model")
+    text = (run / "audit.md").read_text()
+    assert ("- Threat model (confirmed in the tool on 2026-11-18T08:00:00, SHA-256 abc123def456): used for the "
+            "security decisions and texts.") in text
+    assert "<summary>Threat model</summary>" in text and "**Untrusted inputs (trust boundaries)**" in text
+
+
+def test_without_threat_model_the_audit_says_so(tmp_path):
+    run = make_run(tmp_path)
+    result, _, _ = evaluate(run)
+    assert result.complete and result.areas[0].notes[-1].startswith("No threat model in the run folder")
+    assert read(run / "step6-llm-evaluation" / "summary.json")["threat_model"] is None
+    assert "- No threat model: the security decisions and texts were made without one." in (
+        run / "audit.md").read_text()
+
+
+def test_resume_labels_security_again_when_the_threat_model_changed(tmp_path):
+    run = make_run(tmp_path)
+    with_threat_model(run)
+    evaluate(run)
+    with_threat_model(run, "# Threat model\n\nNo untrusted inputs: a command line tool for its own developers.")
+    result, fake, out = evaluate(run, resume=True)
+    assert result.complete, result.errors
+    assert "security: labeled again: the questions changed since" in out
+    assert "code quality: reused" in out and "test quality: reused" in out
+    assert any("command line tool for its own developers" in body["state"]
+               for endpoint, body in fake.requests if endpoint == "/v1/systemone")

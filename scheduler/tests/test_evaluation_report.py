@@ -2,9 +2,10 @@
 
 import json
 
-from evaluation_data import PATCH, FakeClient, FakeOllama, add_quality_findings, make_run
+import pytest
+from evaluation_data import PATCH, FakeClient, FakeOllama, add_quality_findings, add_security_groups, make_run
 
-from scheduler.evaluation.config import ReportConfig
+from scheduler.evaluation.config import ConfigError, InputConfig, ReportConfig, load_config
 from scheduler.evaluation.items import SourceReader, code_quality_items, project_of, security_items, test_items
 from scheduler.evaluation.report import (TextWriter, build_report, locations_by_file, patch_example, patch_sample,
                                          patch_stats, validate_summary, validate_texts, write_texts)
@@ -40,6 +41,77 @@ def test_security_report_keeps_every_finding_exactly_once(tmp_path):
     assert lodash["identifiers"]["cve"] == ["CVE-2021-23337"] and lodash["package"]["fixed_versions"] == ["4.17.21"]
     assert all(entry["title"] is None for entry in report["entries"])  # texts come from the model
     assert set(draft.inputs) == {entry["entry_id"] for entry in report["entries"]}
+
+
+NOISE_IN_TESTS = {"S-0003": "NOISE", "S-0006": "NOISE", "S-0007": "NOISE"}
+
+
+def test_security_report_groups_by_rule_and_label(tmp_path):
+    run = make_run(tmp_path)
+    add_security_groups(run)
+    area = security_items(run, SourceReader(project_of(run)))
+    limits = InputConfig(group_samples=2, group_samples_with_code=1)
+    draft = build_report(area, decisions_for(area, NOISE_IN_TESTS), run, limits)
+    report = draft.report
+    # REAL of high, error or critical: one entry each; the others by rule (or package) and label; a group of one
+    # is a single entry. Sorted by label, severity, size.
+    assert [(entry["entry_id"], entry["label"], entry["count"], entry["source_ids"])
+            for entry in report["entries"]] == [
+        ("E-001", "REAL", 1, ["D-0001", "D-0002"]),
+        ("E-002", "REAL", 1, ["S-0001", "S-0002"]),
+        ("E-003", "REAL", 1, ["S-0008"]),
+        ("E-004", "REAL", 3, ["D-0004", "D-0005", "D-0006"]),
+        ("E-005", "REAL", 1, ["D-0003"]),
+        ("E-006", "REAL", 2, ["S-0004", "S-0005"]),
+        ("E-007", "NOISE", 1, ["S-0003"]),
+        ("E-008", "NOISE", 2, ["S-0006", "S-0007"]),
+    ]
+    stats = report["statistics"]
+    assert (stats["input_findings"], stats["report_entries"], stats["groups"]) == (14, 8, 3)
+    assert stats["by_label"] == {"REAL": 9, "NOISE": 3, "DUPLICATE": 2}
+    assert stats["real_by_severity"] == {"error": 2, "high": 1, "medium": 4, "note": 2}  # per finding
+    typos = report["entries"][5]
+    assert typos["locations"] == [{"file": "src/app.py", "line": 1}, {"file": "src/app.py", "line": 3}]
+    assert (typos["files"], typos["severities"], typos["identifiers"]["rule_ids"]) == (1, {"note": 2},
+                                                                                       ["c.raptor-typos"])
+    # Every finding stays in the report, with its own decision.
+    assert [(finding["source_ids"], finding["confidence"]) for finding in typos["findings"]] == [
+        (["S-0004"], 0.9), (["S-0005"], 0.9)]
+    tomcat = report["entries"][3]
+    assert tomcat["package"]["installed_versions"] == ["9.0.1"]
+    assert tomcat["package"]["fixed_versions"] == ["9.0.40", "9.0.43"]
+    assert [finding["identifiers"]["other"] for finding in tomcat["findings"]] == [
+        ["GHSA-aaaa-0000-0001"], ["GHSA-aaaa-0000-0002"], ["GHSA-aaaa-0000-0003"]]
+    # The model sees a group with its size and a few samples, the first ones with code.
+    shown = draft.inputs["E-006"]
+    assert (shown["id"], shown["label"], shown["count"], shown["rule"]) == ("E-006", "REAL", 2, "c.raptor-typos")
+    assert [sample["line"] for sample in shown["samples"]] == [1, 3]
+    assert "code" in shown["samples"][0] and "code" not in shown["samples"][1]
+    assert draft.inputs["E-004"]["package"] == "tomcat-embed-core" and len(draft.inputs["E-004"]["samples"]) == 2
+    assert draft.inputs["E-003"]["file"] == "src/other.py"  # a single finding as before
+    assert [entry["count"] for entry in draft.facts["real_entries"]] == [1, 1, 1, 3, 1, 2]
+
+
+def test_security_single_severity(tmp_path):
+    run = make_run(tmp_path)
+    add_security_groups(run)
+    area = security_items(run, SourceReader(project_of(run)))
+    report = build_report(area, decisions_for(area, NOISE_IN_TESTS), run,
+                          InputConfig(security_single_severity="note")).report
+    # Every REAL finding is an entry of its own; NOISE is still grouped.
+    assert [entry["count"] for entry in report["entries"]] == [1] * 9 + [1, 2]
+    assert report["statistics"]["groups"] == 1
+
+
+@pytest.mark.parametrize("value, error", [('"Critical"', None), ('"urgent"', "must be one of")])
+def test_security_single_severity_setting(tmp_path, value, error):
+    config = tmp_path / "code-analysis.toml"
+    config.write_text(f"[llm.input]\nsecurity_single_severity = {value}\n")
+    if error is None:
+        assert load_config(config).input.security_single_severity == "critical"
+    else:
+        with pytest.raises(ConfigError, match=error):
+            load_config(config)
 
 
 def test_lint_report_statistics_and_patch(tmp_path):

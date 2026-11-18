@@ -76,6 +76,36 @@ QUALITY_FINDINGS = [
 ]
 
 
+# Security findings that the report groups (S-0004 to S-0008, D-0004 to D-0006): one rule in src/ and tests/
+# (the fake labels tests/ NOISE with low confidence), a single REAL error, and three advisories of one package.
+TYPO = {"tool": "opengrep", "ruleset": "opengrep-rules", "rule": "c.raptor-typos", "severity": "note",
+        "tool_severity": "INFO", "message": "Possible typo", "category": "security"}
+SECURITY_GROUP_FINDINGS = [
+    TYPO | {"file": "src/app.py", "line": 1, "end_line": 1, "fingerprint": "g1"},
+    TYPO | {"file": "src/app.py", "line": 3, "end_line": 3, "fingerprint": "g2"},
+    TYPO | {"file": "tests/test_app.py", "line": 1, "end_line": 1, "fingerprint": "g3"},
+    TYPO | {"file": "tests/test_app.py", "line": 3, "end_line": 3, "fingerprint": "g4"},
+    {"tool": "opengrep", "ruleset": "opengrep-rules", "rule": "c.raptor-suspicious-assert", "severity": "error",
+     "tool_severity": "ERROR", "message": "Assert with side effects", "file": "src/other.py", "line": 1,
+     "end_line": 1, "category": "security", "fingerprint": "g5"},
+]
+TOMCAT = {"tool": "osv-scanner", "ecosystem": "Maven", "package": "tomcat-embed-core", "version": "9.0.1",
+          "severity": "medium", "summary": "Request smuggling in Tomcat", "manifest": "pom.xml", "aliases": []}
+SECURITY_GROUP_DEPENDENCIES = [
+    TOMCAT | {"id": "GHSA-aaaa-0000-0001", "fixed_versions": ["9.0.40"]},
+    TOMCAT | {"id": "GHSA-aaaa-0000-0002", "fixed_versions": ["9.0.43"]},
+    TOMCAT | {"id": "GHSA-aaaa-0000-0003", "fixed_versions": ["9.0.40"]},
+]
+
+
+def add_security_groups(run: Path) -> None:
+    """Add SECURITY_GROUP_FINDINGS and SECURITY_GROUP_DEPENDENCIES to the findings of steps 3 and 4."""
+    for folder, added in (("step3-static-analysis", SECURITY_GROUP_FINDINGS),
+                          ("step4-dependencies", SECURITY_GROUP_DEPENDENCIES)):
+        path = run / folder / "findings.json"
+        path.write_text(json.dumps(json.loads(path.read_text()) + added, indent=2))
+
+
 def add_quality_findings(run: Path) -> None:
     """Add QUALITY_FINDINGS to the findings of step 3."""
     path = run / "step3-static-analysis" / "findings.json"

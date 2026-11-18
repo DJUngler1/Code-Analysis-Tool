@@ -74,9 +74,11 @@ class AreaItems:
     facts: dict = field(default_factory=dict)  # everything the report needs besides the items
     notes: list[str] = field(default_factory=list)
     available: bool = True  # False if the steps this area needs did not run
+    threat_model: str = ""  # security only: the run's threat model as the prompts see it (evaluation/threat.py)
 
     def to_json(self) -> dict:
         return {"area": self.area, "available": self.available, "notes": self.notes, "context": self.context,
+                **({"threat_model": self.threat_model} if self.threat_model else {}),
                 "items": self.items, "duplicates": self.duplicates}
 
 
@@ -278,7 +280,7 @@ def _static_items(area: AreaItems, findings: list[dict], reader: SourceReader, g
         if duplicates:
             data["also_reported_as"] = sorted({f"{findings[index].get('tool')}: {findings[index].get('rule')}"
                                                for index in duplicates})
-        area.items.append({"id": ids[canonical], "kind": "static", "data": _compact(data),
+        area.items.append({"id": ids[canonical], "kind": "static", "data": compact(data),
                            "duplicates": [ids[index] for index in duplicates],
                            "fingerprints": [findings[index].get("fingerprint") for index in members]})
 
@@ -350,7 +352,7 @@ def _dependency_items(area: AreaItems, findings: list[dict], limits: InputConfig
             "configurations": (finding.get("configurations") or [])[:5] or None,
             "url": finding.get("url"),
         }
-        area.items.append({"id": ids[canonical], "kind": "dependency", "data": _compact(data),
+        area.items.append({"id": ids[canonical], "kind": "dependency", "data": compact(data),
                            "duplicates": [ids[index] for index in duplicates]})
 
 
@@ -421,7 +423,7 @@ def code_quality_items(run_dir: Path, reader: SourceReader, limits: InputConfig 
     ordered = sorted(groups.items(), key=lambda entry: (scope_order.index(entry[0][3]), -len(entry[1]),
                                                         str(entry[0][1]), str(entry[0][2])))
     for number, ((source, tool, rule, scope), members) in enumerate(ordered, start=1):
-        samples = _spread_samples(members, limits.group_samples)
+        samples = spread_samples(members, limits.group_samples)
         messages = list(dict.fromkeys(clip(member.get("message"), GROUP_MESSAGE_CHARS) for member in members))
         static = source == "static"
         data = {
@@ -438,14 +440,14 @@ def code_quality_items(run_dir: Path, reader: SourceReader, limits: InputConfig 
             "severity": highest(member.get("severity") for member in members),
             "fixed_by_the_tool": None if static else sum(1 for member in members if member.get("fixed")),
             "messages": messages[:limits.group_messages],
-            "samples": [_compact({"file": sample.get("file"), "line": sample.get("line"),
+            "samples": [compact({"file": sample.get("file"), "line": sample.get("line"),
                                   "code": reader.snippet(sample.get("file"), sample.get("line"))
                                   if position < limits.group_samples_with_code else None})
                         for position, sample in enumerate(samples)],
         }
         # Every location of the group, for the report and the audit; the models only see the samples.
         area.items.append({"id": f"L-{number:03d}", "kind": "static_group" if static else "lint_group",
-                           "data": _compact(data), "locations": _locations(members)})
+                           "data": compact(data), "locations": _locations(members)})
     lint_tools = tool_facts(lint_summary) if lint_summary else []
     static_tools = tool_facts(static_summary) if static_summary else []
     area.facts = {
@@ -476,7 +478,7 @@ def _locations(members: list[dict]) -> list[dict]:
             for file, line in sorted(found, key=lambda entry: (entry[0], entry[1] if entry[1] is not None else -1))]
 
 
-def _spread_samples(members: list[dict], count: int) -> list[dict]:
+def spread_samples(members: list[dict], count: int) -> list[dict]:
     """Samples from different files first."""
     seen: set[str | None] = set()
     first = []
@@ -567,7 +569,7 @@ def _failure_items(area: AreaItems, tests: list[dict], limits: InputConfig) -> N
             "tests": [clip(member.get("id"), TEST_NAME_CHARS) for member in members[:limits.failed_tests_per_group]],
             "message": clip(members[0].get("message"), limits.failure_message_chars),
         }
-        area.items.append({"id": f"T-{number:03d}", "kind": "test_failure", "data": _compact(data),
+        area.items.append({"id": f"T-{number:03d}", "kind": "test_failure", "data": compact(data),
                            "cause": cause, "tests": [member.get("id") for member in members]})
 
 
@@ -594,7 +596,7 @@ def _weak_file_items(area: AreaItems, coverage: list[dict], mutants: list[dict],
             data = {"kind": "source file with little or no test coverage", "suite": suite.get("suite"), **entry,
                     "mutants_not_detected": dict(counts) or None, "scope": path_scope(entry["file"], set()),
                     "declarations": reader.declarations(entry["file"])}
-            area.items.append({"id": f"F-{number:04d}", "kind": "weak_file", "data": _compact(data)})
+            area.items.append({"id": f"F-{number:04d}", "kind": "weak_file", "data": compact(data)})
 
 
 def _mutant_items(area: AreaItems, mutants: list[dict]) -> None:
@@ -603,9 +605,9 @@ def _mutant_items(area: AreaItems, mutants: list[dict]) -> None:
         data = {"kind": "mutant the tests did not detect (survived)", "suite": mutant.get("suite"),
                 "file": mutant.get("file"), "line": mutant.get("line"), "mutator": mutant.get("mutator"),
                 "change": clip(mutant.get("replacement"), 200), "original_line": clip(mutant.get("original"), 200)}
-        area.items.append({"id": f"M-{number:04d}", "kind": "mutant", "data": _compact(data)})
+        area.items.append({"id": f"M-{number:04d}", "kind": "mutant", "data": compact(data)})
 
 
-def _compact(data: dict) -> dict:
+def compact(data: dict) -> dict:
     """Leave out empty values: they cost space in every request."""
     return {key: value for key, value in data.items() if value not in (None, "", [], {})}

@@ -61,6 +61,27 @@
 <div class="tp-ar">↓</div>
 
 <div class="tp-ph">
+  <p class="tp-pt">Threat model (before step 2; with --evaluate before step 6)</p>
+  <div class="tp-row">
+    <div class="tp-col">
+      <div class="tp-n d"><b>Confirmed threat model?</b><span>Committed to the project (.code-analysis/threat-model.md) or confirmed in the results folder · yes → use it</span></div>
+      <div class="tp-n x"><span class="lb">no, and no terminal (e.g. CI)</span><b>Abort</b><span>Exit code 10 · write it yourself and commit it</span></div>
+    </div>
+    <div class="tp-col">
+      <div class="tp-n d"><b>No threat model yet: create = ?</b><span>[llm.threat_model] in code-analysis.toml</span></div>
+      <div class="tp-n"><span class="lb">"generate" (default)</span><b>3 questions → draft by the reasoning model</b><span>From the answers, README, SECURITY.md, docs/</span></div>
+      <div class="tp-n"><span class="lb">"manual"</span><b>Template → written by the user</b><span>Headings, the 3 questions as hints · no model</span></div>
+    </div>
+    <div class="tp-col">
+      <div class="tp-n"><b>User reads, corrects, confirms</b><span>In an editor, then confirm in the terminal</span></div>
+      <div class="tp-n"><b>Copy into the run folder</b><span>Step 6 uses it for the security decisions and reports</span></div>
+    </div>
+  </div>
+  <p class="tp-note">The 3 questions: What kind of software is it, and how is it used? Where does untrusted data come in? What is shipped, and what is not?</p>
+</div>
+<div class="tp-ar">↓</div>
+
+<div class="tp-ph">
   <p class="tp-pt">2 · Conventions &amp; formatting (per language)</p>
   <div class="tp-row">
     <div class="tp-n"><b>Install linter / formatter</b><span>Fixed rules per language (own configuration)</span></div>
@@ -111,7 +132,7 @@
   <p class="tp-pt">6 · LLM evaluation via Ollama (local or cloud models, check costs)</p>
   <div class="tp-n d tp-gap"><b>Static finding (step 3): security issue or bug, or no category?</b><span>The tool's own category · security, correctness, reliability or none → Security · others (maintainability, best practice, portability, …) → Code quality</span></div>
   <div class="tp-row">
-    <div class="tp-n"><b>Security</b><span>Merge OSV, package manager audit and the OpenGrep / SonarQube security and bug findings · filter duplicates, noise, false positives · classify, suggest actions</span></div>
+    <div class="tp-n"><b>Security</b><span>Merge OSV, package manager audit and the OpenGrep / SonarQube security and bug findings · filter duplicates, noise, false positives with the confirmed threat model · classify, suggest actions: one text per rule (or package), REAL critical / high / error findings each their own</span></div>
     <div class="tp-n"><b>Code quality</b><span>Summarize and filter linter/formatter results and the other OpenGrep / SonarQube findings, grouped by rule · check naming · assess project structure</span></div>
     <div class="tp-n"><b>Test quality</b><span>Do the tests work? · interpret mutation results · compare tests vs. code · untested parts: critical or non-critical?</span></div>
   </div>

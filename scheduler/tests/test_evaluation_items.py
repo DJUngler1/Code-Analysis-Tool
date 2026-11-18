@@ -87,13 +87,16 @@ def test_decision_prompts_parse(name):
     assert "{{RUN_CONTEXT}}" in prompt.context and "{{ITEM}}" in prompt.question
     assert prompt.default in ("REAL", "PROJECT", "CRITICAL", "TEST_GAP")
     assert "DUPLICATE" not in prompt.labels
+    # Only security gets the threat model.
+    assert ("{{THREAT_MODEL}}" in prompt.context) == (name == "security_decision")
 
 
 @pytest.mark.parametrize("name", ["security_report", "lint_report", "test_report"])
 def test_report_prompts_parse_and_render(name):
     parts = report_prompt(name)
     assert "{{REPORT_LANGUAGE}}" in parts["System"]
-    assert render(parts["System"], REPORT_LANGUAGE="German").count("German") >= 1
+    assert ("{{THREAT_MODEL}}" in parts["System"]) == (name == "security_report")
+    assert render(parts["System"], REPORT_LANGUAGE="German", THREAT_MODEL="TM").count("German") >= 1
     assert render(parts["Entries"], ENTRIES="[]")
     assert render(parts["Summary"], FACTS="{}")
 

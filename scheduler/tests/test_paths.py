@@ -61,11 +61,19 @@ def test_path_outside_projects_dir_is_rejected(tmp_path):
 def test_settings_from_env(tmp_path):
     loaded = Settings.from_env({
         "PROJECTS_DIR": str(tmp_path), "HOST_HOME": "/Users/me", "OLLAMA_BASE_URL": "http://ollama:11434/",
-        "CONFIG_FILE": "/app/code-analysis.toml",
+        "CONFIG_FILE": "/app/repository/code-analysis.toml",
     })
     assert loaded == Settings(tmp_path.resolve(), Path("/Users/me"), "http://ollama:11434",
-                              config_file=Path("/app/code-analysis.toml"))
+                              config_file=Path("/app/repository/code-analysis.toml"))
     assert Settings.from_env({}).projects_dir is None
+
+
+def test_a_missing_configuration_file_names_the_remedy(tmp_path):
+    from scheduler.tool_config import ConfigFileError, read_config
+
+    with pytest.raises(ConfigFileError, match="code-analysis.toml is missing") as error:
+        read_config(tmp_path / "code-analysis.toml")
+    assert "up -d --force-recreate" in str(error.value)
 
 
 def test_config_file_defaults_to_the_repository_file():

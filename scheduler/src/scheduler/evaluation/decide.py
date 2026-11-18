@@ -25,6 +25,7 @@ from scheduler.evaluation.config import MAX_REQUEST_KIB, DecisionConfig
 from scheduler.evaluation.items import AreaItems
 from scheduler.evaluation.ollama import Exchange, OllamaClient
 from scheduler.evaluation.prompts import DecisionPrompt, decision_prompt, render
+from scheduler.evaluation.threat import NO_THREAT_MODEL
 
 PROMPTS = {
     "static": "security_decision",
@@ -57,6 +58,13 @@ class DecisionStats:
                 "input_tokens": self.input_tokens, "defaulted": self.defaulted,
                 "low_confidence": self.low_confidence, "labels": dict(self.labels)}
 
+    @classmethod
+    def from_json(cls, data: dict) -> DecisionStats:
+        """The statistics of an earlier evaluation (to_json), for decisions that are reused."""
+        names = ("items", "requests", "failed_requests", "split_requests", "duration_seconds", "input_tokens",
+                 "defaulted", "low_confidence")
+        return cls(**{name: data[name] for name in names if name in data}, labels=Counter(data.get("labels") or {}))
+
 
 @dataclass
 class Batch:
@@ -68,6 +76,26 @@ class Batch:
 def question_for(prompt: DecisionPrompt, item: dict) -> dict:
     shown = json.dumps({"id": item["id"], **item["data"]}, ensure_ascii=False)
     return {"type": "choice", "instructions": render(prompt.question, ITEM=shown), "criteria": prompt.labels}
+
+
+def shared_input(prompt: DecisionPrompt, area: AreaItems) -> str:
+    """The `state` of a request: the prompt's context with the run's facts (and, for security, the threat model).
+
+    --resume compares it with the logged requests, so a changed threat model labels the area again."""
+    return render(prompt.context, RUN_CONTEXT=json.dumps(area.context, ensure_ascii=False),
+                  THREAT_MODEL=area.threat_model or NO_THREAT_MODEL)
+
+
+def questions_of(area: AreaItems) -> dict[str, tuple[str, dict]]:
+    """Per item: the shared input and the question, exactly as decide_area sends them."""
+    asked: dict[str, tuple[str, dict]] = {}
+    for name in dict.fromkeys(PROMPTS[item["kind"]] for item in area.items):
+        prompt = decision_prompt(name)
+        state = shared_input(prompt, area)
+        for item in area.items:
+            if PROMPTS[item["kind"]] == name:
+                asked[item["id"]] = (state, question_for(prompt, item))
+    return asked
 
 
 def pack(items: list[dict], prompt: DecisionPrompt, state: str, config: DecisionConfig) -> list[Batch]:
@@ -101,7 +129,7 @@ def decide_area(client: OllamaClient, config: DecisionConfig, area: AreaItems, *
     batches: list[Batch] = []
     for name in dict.fromkeys(PROMPTS[item["kind"]] for item in area.items):
         prompt = decision_prompt(name)
-        state = render(prompt.context, RUN_CONTEXT=json.dumps(area.context, ensure_ascii=False))
+        state = shared_input(prompt, area)
         batches += pack([item for item in area.items if PROMPTS[item["kind"]] == name], prompt, state, config)
     done = 0
     next_report = 1

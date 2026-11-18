@@ -12,10 +12,13 @@ Runs at the end of step 6, and on its own for an evaluated run folder:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
 from scheduler.evaluation.items import DEPENDENCIES_DIR, EVALUATION_DIR, LINT_DIR, STATIC_DIR, TESTS_DIR, read_json
+from scheduler.evaluation.report import locations_by_file
+from scheduler.evaluation.threat import run_threat_model
 
 STEP_DIR = EVALUATION_DIR
 AREAS = ("security", "code_quality", "test_quality")
@@ -41,6 +44,8 @@ TEXTS = {
         "group_locations": "{id} – {rule}: {count} {findings_word} in {files} {files_word}",
         "finding_words": ("finding", "findings"), "file_words": ("file", "files"),
         "locations_of_real_groups": "Locations of the REAL groups",
+        "locations_of_filtered_groups": "Locations of the filtered groups",
+        "group_findings": "{id} – {subject}: {count} {findings_word}",
         "formatter_changes": "Formatter changes", "excluded": "Excluded files", "tools": "Tools",
         "files_changed": "files changed", "kinds": "Kinds of change", "example": "Example",
         "count": "Count", "examples": "Examples", "suite": "Suite", "tool": "Tool",
@@ -65,6 +70,15 @@ TEXTS = {
                          "confidence and entries with a review hint are in the review list.",
         "texts_missing": "{count} entries have no texts (the reasoning model gave no valid answer).",
         "skipped": "skipped", "settings": "Settings",
+        "decisions_reused": "Decisions ({areas}) taken over from the evaluation started {started} (same decision "
+                            "model, settings and questions); only the reports were written again.",
+        "threat_model_line": "Threat model ({source}, SHA-256 {sha}): used for the security decisions and texts"
+                             "{shortened}.",
+        "threat_model_sources": {"project": "committed to the project", "results": "confirmed in the tool"},
+        "threat_model_confirmed": " on {date}",
+        "threat_model_shortened": " (shortened to {limit} of {chars} characters)",
+        "threat_model_missing": "No threat model: the security decisions and texts were made without one.",
+        "threat_model_text": "Threat model",
     },
     "de": {
         "title": "Code-Analyse-Audit", "overview": "1. Überblick", "key_figures": "2. Kennzahlen",
@@ -84,6 +98,8 @@ TEXTS = {
         "group_locations": "{id} – {rule}: {count} {findings_word} in {files} {files_word}",
         "finding_words": ("Befund", "Befunde"), "file_words": ("Datei", "Dateien"),
         "locations_of_real_groups": "Fundstellen der REAL-Gruppen",
+        "locations_of_filtered_groups": "Fundstellen der herausgefilterten Gruppen",
+        "group_findings": "{id} – {subject}: {count} {findings_word}",
         "formatter_changes": "Änderungen der Formatter", "excluded": "Ausgeschlossene Dateien",
         "tools": "Werkzeuge", "files_changed": "Dateien geändert", "kinds": "Art der Änderungen",
         "example": "Beispiel", "count": "Anzahl", "examples": "Beispiele", "suite": "Suite", "tool": "Werkzeug",
@@ -111,6 +127,17 @@ TEXTS = {
                          "Liste „Zu prüfen“.",
         "texts_missing": "{count} Einträge haben keine Texte (das Reasoning-Modell gab keine gültige Antwort).",
         "skipped": "übersprungen", "settings": "Einstellungen",
+        "decisions_reused": "Entscheidungen ({areas}) übernommen aus der Auswertung vom {started} (gleiches "
+                            "Entscheidungsmodell, gleiche Einstellungen und Fragen); nur die Berichte wurden neu "
+                            "geschrieben.",
+        "threat_model_line": "Bedrohungsmodell ({source}, SHA-256 {sha}): genutzt für die Entscheidungen und Texte "
+                             "im Bereich Sicherheit{shortened}.",
+        "threat_model_sources": {"project": "im Projekt committet", "results": "im Tool bestätigt"},
+        "threat_model_confirmed": " am {date}",
+        "threat_model_shortened": " (gekürzt auf {limit} von {chars} Zeichen)",
+        "threat_model_missing": "Kein Bedrohungsmodell: Die Entscheidungen und Texte im Bereich Sicherheit "
+                                "entstanden ohne.",
+        "threat_model_text": "Bedrohungsmodell",
     },
 }
 
@@ -155,11 +182,15 @@ def build_audit(run_dir: Path, evaluation: dict) -> dict:
                          "notes": (status.get(area) or {}).get("notes", []),
                          "report": reports[area]} for area in AREAS},
         "review": review_list(reports),
+        "threat_model": {"info": evaluation.get("threat_model"), "used": reports.get("security") is not None,
+                         "text": run_threat_model(run_dir, 10**9)[0]},
         "method": {
             "settings": {key: settings.get(key) for key in ("report_language", "areas")} if settings else {},
             "decision": settings.get("decision"),
             "report": settings.get("report"),
             "report_overrides": settings.get("report_overrides") or {},
+            "decisions_reused": {area["area"]: area["decisions_reused_from"] for area in evaluation.get("areas", [])
+                                 if area.get("decisions_reused_from")},
             "errors": evaluation.get("errors", []),
         },
     }
@@ -202,7 +233,7 @@ def key_figures(reports: dict[str, dict | None]) -> dict:
             "mutation_score": {run["suite"]: run.get("score") for run in stats.get("mutation", [])},
         }
     review = review_list(reports)
-    figures["review"] = {"low_confidence": sum(1 for entry in review if entry["low_confidence"]),
+    figures["review"] = {"low_confidence": sum(entry["low_confidence_decisions"] for entry in review),
                          "review_hints": sum(1 for entry in review if entry["review_hint"])}
     return figures
 
@@ -222,8 +253,11 @@ def review_list(reports: dict[str, dict | None]) -> list[dict]:
     for area in AREAS:
         for entry in entries_of(reports.get(area)):
             if entry.get("review") or entry.get("review_hint"):
+                low = entry.get("low_confidence_findings")  # a security group: its findings' own decisions
                 review.append({"area": area, "id": entry_id(entry), "label": entry.get("label"),
                                "confidence": entry.get("confidence"), "low_confidence": bool(entry.get("review")),
+                               "low_confidence_decisions": low if low is not None else int(bool(entry.get("review"))),
+                               "count": entry.get("count") if low is not None else None,
                                "title": entry.get("title"), "review_hint": entry.get("review_hint")})
     return review
 
@@ -376,19 +410,69 @@ def _security(area: dict, t: dict) -> list[str]:
     entries = report.get("entries", [])
     real = [entry for entry in entries if entry["label"] == "REAL"]
     other = [entry for entry in entries if entry["label"] != "REAL"]
-    lines += [f"### {t['real_findings']} ({len(real)})", ""]
+    lines += [f"### {t['real_findings']} ({_finding_count(real)})", ""]
     if real:
-        lines += table([t["id"], t["severity"], t["title_col"], t["location"], t["recommendation"]],
-                       [[entry["entry_id"], entry.get("severity"), entry.get("title"), location(entry),
-                         entry.get("recommendation")] for entry in real])
+        lines += table([t["id"], t["severity"], t["findings"], t["title_col"], t["location"], t["recommendation"]],
+                       [[entry["entry_id"], entry.get("severity"), entry.get("count") or 1, entry.get("title"),
+                         security_where(entry, t), entry.get("recommendation")] for entry in real])
         lines.append("")
+        lines += _security_locations(real, t["locations_of_real_groups"], t)
     if other:
-        lines += details(f"{t['filtered']} ({len(other)})",
-                         table([t["id"], t["label"], t["title_col"], t["location"], t["reason"]],
-                               [[entry["entry_id"], entry["label"], entry.get("title"), location(entry),
-                                 entry.get("reason")] for entry in other]))
+        filtered = table([t["id"], t["label"], t["findings"], t["title_col"], t["location"], t["reason"]],
+                         [[entry["entry_id"], entry["label"], entry.get("count") or 1, entry.get("title"),
+                           security_where(entry, t), entry.get("reason")] for entry in other])
+        lines += details(f"{t['filtered']} ({_finding_count(other)})",
+                         filtered + [""] + _security_locations(other, t["locations_of_filtered_groups"], t))
         lines.append("")
     return lines
+
+
+def _finding_count(entries: list[dict]) -> int:
+    return sum(entry.get("count") or 1 for entry in entries)
+
+
+def security_where(entry: dict, t: dict) -> str:
+    """The location or package of a security entry; for a group the first location and how many more."""
+    package = entry.get("package")
+    if package and "installed_versions" in package:  # a group of findings of one package
+        versions = ", ".join(package["installed_versions"])
+        return f"{package.get('name')}@{versions}" if versions else str(package.get("name"))
+    text = location(entry)
+    rest = (entry.get("count") or 1) - 1
+    return f"{text} (+{rest} {t['more']})" if rest and not package else text
+
+
+def _security_locations(entries: list[dict], heading: str, t: dict) -> list[str]:
+    """Every finding of the security groups, as a collapsible list per group."""
+    groups = [entry for entry in entries if (entry.get("count") or 1) > 1]
+    if not groups:
+        return []
+    lines = [f"#### {heading}", ""]
+    for entry in groups:
+        count = entry["count"]
+        if entry.get("package"):
+            summary = t["group_findings"].format(id=entry["entry_id"], subject=entry["package"].get("name"),
+                                                 count=count, findings_word=t["finding_words"][count != 1])
+            listed = [advisory_line(finding) for finding in entry.get("findings") or []]
+        else:
+            files = locations_by_file(entry.get("locations") or [])
+            rules = ", ".join(entry.get("identifiers", {}).get("rule_ids") or [])
+            summary = t["group_locations"].format(
+                id=entry["entry_id"], rule=f"{', '.join(entry.get('tools') or [])} / {rules}", count=count,
+                files=len(files), findings_word=t["finding_words"][count != 1],
+                files_word=t["file_words"][len(files) != 1])
+            listed = [location_line(file) for file in files]
+        lines += details(summary, listed) + [""]
+    return lines
+
+
+def advisory_line(finding: dict) -> str:
+    """One finding of a dependency group: its advisories, severity, installed and fixed versions."""
+    identifiers = finding.get("identifiers") or {}
+    names = ", ".join([*identifiers.get("other", []), *identifiers.get("cve", [])]) or finding["source_ids"][0]
+    package = finding.get("package") or {}
+    fixed = ", ".join(package.get("fixed_versions") or []) or "–"
+    return f"- {names} ({finding.get('severity') or '–'}): {package.get('installed_version') or '?'} → {fixed}"
 
 
 def _code_quality(area: dict, t: dict) -> list[str]:
@@ -518,10 +602,35 @@ def _review(audit: dict, t: dict) -> list[str]:
         return lines + [t["no_review"], ""]
     lines += table([t["area"], t["id"], t["label"], t["confidence"], t["title_col"], t["hint"]],
                    [[TEXTS[audit["language"]][entry["area"]].split(". ", 1)[-1], entry["id"], entry["label"],
-                     (f"{entry['confidence']:.2f}" if isinstance(entry["confidence"], (int, float)) else "–")
-                     + (f" ({t['low_confidence']})" if entry["low_confidence"] else ""),
-                     entry.get("title"), entry.get("review_hint")] for entry in review])
+                     _review_confidence(entry, t), entry.get("title"), entry.get("review_hint")] for entry in review])
     return lines + [""]
+
+
+def _review_confidence(entry: dict, t: dict) -> str:
+    if entry.get("count"):  # a security group: how many of its findings were decided with low confidence
+        return f"{entry['low_confidence_decisions']} / {entry['count']} {t['low_confidence']}"
+    return ((f"{entry['confidence']:.2f}" if isinstance(entry["confidence"], (int, float)) else "–")
+            + (f" ({t['low_confidence']})" if entry["low_confidence"] else ""))
+
+
+def _threat_model(data: dict, t: dict) -> list[str]:
+    """The threat model the security area used: one line, and its text as a collapsible block."""
+    if not data.get("used"):
+        return []
+    info = data.get("info")
+    if not info:
+        return [f"- {t['threat_model_missing']}"]
+    source = t["threat_model_sources"].get(info.get("source"), str(info.get("source") or "?"))
+    if info.get("confirmed_at"):
+        source += t["threat_model_confirmed"].format(date=info["confirmed_at"])
+    shortened = (t["threat_model_shortened"].format(limit=info.get("limit"), chars=info.get("chars"))
+                 if info.get("shortened") else "")
+    line = t["threat_model_line"].format(source=source, sha=str(info.get("sha256") or "?")[:12], shortened=shortened)
+    lines = [f"- {line}"]
+    if data.get("text"):  # its headings as bold text, so they do not enter the audit's outline
+        text = [re.sub(r"^#+\s*(.+)$", r"**\1**", line) for line in data["text"].splitlines()]
+        lines += ["", *details(t["threat_model_text"], text), ""]
+    return lines
 
 
 def _method(audit: dict, t: dict) -> list[str]:
@@ -554,6 +663,11 @@ def _method(audit: dict, t: dict) -> list[str]:
         for area, overrides in (method.get("report_overrides") or {}).items():
             options = ", ".join(f"{key} {value}" for key, value in overrides.items())
             lines.append(f"- {t['models']} ({t['report_model']}, {t[area].split('. ', 1)[-1]}): {options}")
+    reused = method.get("decisions_reused") or {}
+    for started in dict.fromkeys(reused.values()):
+        areas = ", ".join(t[area].split(". ", 1)[-1] for area in AREAS if reused.get(area) == started)
+        lines.append(f"- {t['decisions_reused'].format(areas=areas, started=started)}")
+    lines += _threat_model(audit.get("threat_model") or {}, t)
     lines.append(f"- {t['method_labels']}")
     for error in method.get("errors", []):
         lines.append(f"- {error}")

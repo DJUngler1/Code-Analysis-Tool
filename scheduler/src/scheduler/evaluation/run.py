@@ -9,13 +9,20 @@ the other findings of step 3), test quality (step 5). For each area listed in co
 3. Python builds the report, the reasoning model writes its texts (report.py).
    Then it is unloaded, too: the two models are never loaded together.
 4. Python writes the final audit from the reports (audit.py).
+With `resume` (--evaluate <run folder> --resume), step 2 reuses the decisions of the earlier evaluation of
+the run where nothing that shaped them changed (resume.py); only the other areas are labeled again.
+
+The security area also gets the run's threat model (threat-model.md in the run folder, written before step 2 by
+scheduler.threat_model) in its decision and report prompts.
 
 <OUTPUT_DIR>/<project>/<date_time>/
   audit.md, audit.json      the final audit
+  threat-model.md, .json    the threat model the run used (confirmed by the user)
   step6-llm-evaluation/
     summary.json            models, settings; per area: status, items, requests, durations, tokens, low confidence
     <area>/items.json       the prepared items: ids, duplicates, code context
     <area>/decisions.json   per item: label, probabilities, confidence, review flag (duplicates: duplicate_of)
+    <area>/decisions_info.json  the evaluation that made the decisions: start, model, settings, statistics
     <area>/report.json      the area's report: structure by the tool, texts by the reasoning model
     <area>/requests/NNN-decision.json, NNN-report.json   every request and answer (with the model's reasoning)
 """
@@ -38,6 +45,8 @@ from scheduler.evaluation.items import (EVALUATION_DIR, AreaItems, SourceReader,
                                         security_items, test_items)
 from scheduler.evaluation.ollama import Exchange, OllamaClient, OllamaError, model_key
 from scheduler.evaluation.report import ReportStats, TextWriter, build_report, write_texts
+from scheduler.evaluation.resume import discard_decisions, earlier_decisions, prepare_resume, write_decisions_info
+from scheduler.evaluation.threat import run_threat_model
 from scheduler.linting.model import Status
 
 STEP_DIR = EVALUATION_DIR
@@ -56,10 +65,12 @@ class AreaRun:
     report: ReportStats | None = None
     statistics: dict = field(default_factory=dict)  # the report's statistics, for the console
     notes: list[str] = field(default_factory=list)
+    decisions_reused_from: str | None = None  # start of the earlier evaluation whose decisions were reused
 
     def to_json(self) -> dict:
         return {"area": self.area, "status": self.status.value, "items": self.items, "duplicates": self.duplicates,
                 "decisions": self.decisions.to_json() if self.decisions else None,
+                "decisions_reused_from": self.decisions_reused_from,
                 "report": self.report.to_json() if self.report else None, "notes": self.notes}
 
 
@@ -70,6 +81,7 @@ class EvaluationResult:
     models: dict[str, dict] = field(default_factory=dict)
     audit: Path | None = None
     errors: list[str] = field(default_factory=list)
+    threat_model: dict | None = None  # what summary.json records about the run's threat model (security)
 
     @property
     def complete(self) -> bool:
@@ -81,7 +93,7 @@ class RequestLog:
 
     def __init__(self, folder: Path):
         self.folder = folder
-        self.count = 0
+        self.count = 0  # number of the last log; after reused decisions, the number of their last request
 
     def writer(self, kind: str) -> Callable[[Exchange], None]:
         def write(exchange: Exchange) -> None:
@@ -97,14 +109,19 @@ def run_evaluation(
     run_dir: Path,
     settings: Settings,
     *,
+    resume: bool = False,
     client: OllamaClient | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     out: Callable[[str], None] = print,
 ) -> EvaluationResult:
     started = now()
     step_dir = run_dir / STEP_DIR
-    # Results of an earlier evaluation of this run (--evaluate) are replaced, not mixed.
-    shutil.rmtree(step_dir, ignore_errors=True)
+    if resume:
+        # The decisions stay until it is clear whether they are reused; everything else is written again.
+        prepare_resume(step_dir)
+    else:
+        # Results of an earlier evaluation of this run (--evaluate) are replaced, not mixed.
+        shutil.rmtree(step_dir, ignore_errors=True)
     for name in (AUDIT_MD, AUDIT_JSON):
         (run_dir / name).unlink(missing_ok=True)
     step_dir.mkdir(parents=True, exist_ok=True)
@@ -119,13 +136,19 @@ def run_evaluation(
     prepared: list[tuple[AreaRun, AreaItems]] = []
     if config is not None:
         prepared = _prepare(run_dir, step_dir, config, project, result, out)
+        if resume:  # decisions of areas that are skipped now are not kept, as without resume
+            evaluated = {run.area for run, _ in prepared}
+            for run in result.areas:
+                if run.status is Status.SKIPPED and run.area not in evaluated:
+                    shutil.rmtree(step_dir / run.area, ignore_errors=True)
     if config is not None and prepared:
         # Time limit, repetitions and keep_alive come with each request, from the model's own settings.
         client = client or OllamaClient(settings.ollama_base_url)
         try:
             _check_models(client, config, result)
             if not result.errors:
-                _evaluate(client, config, prepared, run_dir, step_dir, result, out)
+                _evaluate(client, config, prepared, run_dir, step_dir, result, out,
+                          started=started.isoformat(timespec="seconds"), resume=resume)
         except OllamaError as exc:  # unreachable, or stopped answering
             result.errors.append(str(exc))
             for model in (config.decision.model, config.report.model):  # best effort
@@ -170,6 +193,12 @@ def _prepare(run_dir: Path, step_dir: Path, config: LlmConfig, project: Path | N
             out(f"  {AREA_NAMES[name]:<14} failed: {exc}")
             continue
         items.facts["project"] = str(project) if project else None
+        if name == "security" and items.available:
+            text, result.threat_model = run_threat_model(run_dir, config.threat_model.context_chars)
+            items.threat_model = text or ""
+            if text is None:
+                items.notes.append("No threat model in the run folder: the security decisions and texts were made "
+                                   "without one.")
         run.notes += items.notes
         if not items.available:
             out(f"  {AREA_NAMES[name]:<14} skipped: {' '.join(items.notes)}")
@@ -218,17 +247,22 @@ def _check_models(client: OllamaClient, config: LlmConfig, result: EvaluationRes
 
 
 def _evaluate(client: OllamaClient, config: LlmConfig, prepared: list[tuple[AreaRun, AreaItems]], run_dir: Path,
-              step_dir: Path, result: EvaluationResult, out: Callable[[str], None]) -> None:
+              step_dir: Path, result: EvaluationResult, out: Callable[[str], None], *, started: str,
+              resume: bool = False) -> None:
     logs = {run.area: RequestLog(step_dir / run.area / "requests") for run, _ in prepared}
-    _unload(client, config.report.model)  # e.g. still loaded from an earlier run
-    out(f"\n  Labeling with {config.decision.model} (decision model) ...")
     decisions: dict[str, dict[str, dict]] = {}
-    for run, items in prepared:
+    to_label = _reuse_decisions(config, prepared, step_dir, result, logs, decisions, out) if resume else prepared
+    _unload(client, config.report.model)  # e.g. still loaded from an earlier run
+    if to_label:
+        out(f"\n  Labeling with {config.decision.model} (decision model) ...")
+    for run, items in to_label:
         labels, run.decisions = decide_area(client, config.decision, items, log=logs[run.area].writer("decision"),
                                             out=out)
         decisions[run.area] = labels
         _write_json(step_dir / run.area / "decisions.json",
                     [{"id": item_id, **decision} for item_id, decision in labels.items()])
+        write_decisions_info(step_dir / run.area, result.models["decision"], config.decision, started,
+                             run.decisions)
         out(f"    {AREA_NAMES[run.area]}: {_describe_labels(run.decisions)}")
     if not _unload(client, config.decision.model):
         result.errors.append(f"the decision model {config.decision.model} could not be unloaded; the reports were "
@@ -242,7 +276,8 @@ def _evaluate(client: OllamaClient, config: LlmConfig, prepared: list[tuple[Area
             report_config = config.report_for(run.area)  # [llm.report] with the area's own values
             draft = build_report(items, decisions[run.area], run_dir, config.input)
             writer = TextWriter(client, report_config, area=run.area, language=config.report_language,
-                                retries=report_config.retries, log=logs[run.area].writer("report"), out=out)
+                                retries=report_config.retries, threat_model=items.threat_model,
+                                log=logs[run.area].writer("report"), out=out)
             try:
                 write_texts(draft, writer)
             finally:  # also when Ollama stops answering: the report is written with the texts so far
@@ -253,6 +288,28 @@ def _evaluate(client: OllamaClient, config: LlmConfig, prepared: list[tuple[Area
                 out(f"    {AREA_NAMES[run.area]}: {_describe_report(run)}")
     finally:
         _unload(client, config.report.model)
+
+
+def _reuse_decisions(config: LlmConfig, prepared: list[tuple[AreaRun, AreaItems]], step_dir: Path,
+                     result: EvaluationResult, logs: dict[str, RequestLog], decisions: dict[str, dict[str, dict]],
+                     out: Callable[[str], None]) -> list[tuple[AreaRun, AreaItems]]:
+    """--resume: take over the earlier decisions of each area where nothing changed; returns the areas to label."""
+    out("\n  Decisions of the earlier evaluation (--resume) ...")
+    to_label = []
+    for run, items in prepared:
+        folder = step_dir / run.area
+        earlier = earlier_decisions(folder, items, config.decision, result.models["decision"])
+        if isinstance(earlier, str):
+            discard_decisions(folder)
+            to_label.append((run, items))
+            out(f"    {AREA_NAMES[run.area]}: labeled again: {earlier}")
+            continue
+        decisions[run.area], run.decisions = earlier.labels, earlier.stats
+        run.decisions_reused_from = earlier.started
+        logs[run.area].count = earlier.last_request  # the new requests are numbered after the kept ones
+        out(f"    {AREA_NAMES[run.area]}: reused (evaluation started {earlier.started}): "
+            f"{_describe_labels(earlier.stats)}")
+    return to_label
 
 
 def _unload(client: OllamaClient, model: str) -> bool:
@@ -306,6 +363,7 @@ def _summary(result: EvaluationResult, settings: Settings, config: LlmConfig | N
         "errors": result.errors,
         "ollama": settings.ollama_base_url,
         "models": result.models,
+        "threat_model": result.threat_model,
         "settings": asdict(config) if config else None,
         "areas": [run.to_json() for run in result.areas],
         "audit": None,

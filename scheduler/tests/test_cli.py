@@ -1,8 +1,11 @@
+from pathlib import Path
+
 import pytest
 from conftest import commit_all, requires_git
 from test_ollama import unused_port
 
 from scheduler.cli import describe_ollama, main
+from scheduler.threat_model import ThreatModel, ThreatModelError
 from scheduler.linting import LintingResult, Status, ToolRun
 from scheduler.dependencies import Coverage, DependencyFinding, DependencyResult, DependencyRun
 from scheduler.evaluation import AreaRun, EvaluationResult
@@ -85,9 +88,11 @@ class FakeEvaluation(list):
     def __init__(self) -> None:
         super().__init__()
         self.result = EvaluationResult(None)
+        self.resumed: list[bool] = []
 
-    def __call__(self, run_dir, settings):
+    def __call__(self, run_dir, settings, *, resume=False):
         self.append(run_dir)
+        self.resumed.append(resume)
         return self.result
 
 
@@ -95,6 +100,32 @@ class FakeEvaluation(list):
 def step6_calls(monkeypatch) -> FakeEvaluation:
     fake = FakeEvaluation()
     monkeypatch.setattr("scheduler.cli.run_evaluation", fake)
+    return fake
+
+
+class FakeThreatModel:
+    """Stands in for the threat model (questions, Ollama): records the calls and the copies into run folders."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.copies: list = []
+        self.error: str | None = None
+
+    def ensure(self, project, settings, **kwargs):
+        self.calls.append({"project": project, **kwargs})
+        if self.error:
+            raise ThreatModelError(self.error)
+        return ThreatModel("# Threat model", "results", Path("/results/threat-model.md"), "2026-11-18", "abc")
+
+    def copy(self, run_dir, model):
+        self.copies.append(run_dir)
+
+
+@pytest.fixture(autouse=True)
+def threat_model_calls(monkeypatch) -> FakeThreatModel:
+    fake = FakeThreatModel()
+    monkeypatch.setattr("scheduler.cli.ensure_threat_model", fake.ensure)
+    monkeypatch.setattr("scheduler.cli.copy_to_run", fake.copy)
     return fake
 
 
@@ -151,6 +182,56 @@ def test_check_only_skips_step_2(monkeypatch, make_project, capsys, analysis_cal
     assert main(["--path", str(root), "--check-only"]) == 0
     assert calls == [] and analysis_calls == []
     assert "Step 2" not in capsys.readouterr().out
+
+
+@requires_git
+def test_threat_model_before_step_2_and_copied_into_the_run(monkeypatch, make_project, capsys, tmp_path,
+                                                          threat_model_calls):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "results"))
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    fake_linting(monkeypatch, LintingResult(tmp_path / "run", [ToolRun("Python", "ruff check", Status.OK)]))
+    assert main(["--path", str(root)]) == 0
+    (call,) = threat_model_calls.calls
+    assert call["project"] == root and call["folder"] == (tmp_path / "results").resolve() / root.name
+    assert call["facts"]["languages"]["primary"] == "Python" and "top_level_folders" in call["facts"]
+    assert call["interactive"] is False  # pytest has no terminal on stdin
+    assert threat_model_calls.copies == [tmp_path / "run"]
+    assert "Threat model – what an attacker controls and what is shipped" in capsys.readouterr().out
+
+
+@requires_git
+def test_without_threat_model_the_run_stops_before_step_2(monkeypatch, make_project, capsys, threat_model_calls):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    calls = fake_linting(monkeypatch, LintingResult(None))
+    threat_model_calls.error = "no confirmed threat model: nobody can answer the questions."
+    assert main(["--path", str(root)]) == 10
+    assert calls == []
+    assert "Error: no confirmed threat model" in capsys.readouterr().out
+
+
+@requires_git
+def test_check_only_needs_no_threat_model(make_project, threat_model_calls):
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    assert main(["--path", str(root), "--check-only"]) == 0
+    assert threat_model_calls.calls == []
+
+
+@requires_git
+def test_real_threat_model_check_without_terminal(monkeypatch, make_project, capsys, tmp_path):
+    from scheduler import threat_model  # the real lookup: nothing confirmed, and no terminal for the questions
+
+    monkeypatch.setattr("scheduler.cli.ensure_threat_model", threat_model.ensure_threat_model)
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "results"))
+    root = make_project({"main.py": "print(1)\n", "requirements.txt": "requests\n"})
+    commit_all(root)
+    calls = fake_linting(monkeypatch, LintingResult(None))
+    assert main(["--path", str(root)]) == 10
+    out = capsys.readouterr().out
+    assert calls == [] and "without a terminal nobody can answer the questions" in out
+    assert ".code-analysis/threat-model.md" in out
 
 
 @requires_git
@@ -373,6 +454,24 @@ def test_evaluate_runs_only_step_6(monkeypatch, tmp_path, capsys, step6_calls, a
     assert "Step 6 – LLM evaluation and audit of" in out and "Step 6 complete." in out
 
 
+def test_evaluate_uses_and_copies_the_threat_model(monkeypatch, tmp_path, step6_calls, threat_model_calls):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "results"))
+    run = make_run_folder(tmp_path)
+    step6_calls.result = EvaluationResult(run)
+    assert main(["--evaluate", str(run)]) == 0
+    (call,) = threat_model_calls.calls
+    assert call["folder"] == run.resolve().parent and call["project"] is None  # run.json names no project
+    assert threat_model_calls.copies == [run.resolve()]
+
+
+def test_evaluate_without_threat_model_exits_with_10(monkeypatch, tmp_path, step6_calls, threat_model_calls):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "results"))
+    run = make_run_folder(tmp_path)
+    threat_model_calls.error = "aborted"
+    assert main(["--evaluate", str(run)]) == 10
+    assert step6_calls == []
+
+
 def test_evaluate_exits_with_9_when_incomplete(monkeypatch, tmp_path, step6_calls):
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "results"))
     run = make_run_folder(tmp_path)
@@ -397,6 +496,22 @@ def test_evaluate_rejects_other_folders(monkeypatch, tmp_path, capsys, step6_cal
 def test_evaluate_needs_an_absolute_path(capsys, step6_calls):
     assert main(["--evaluate", "results/app"]) == 1
     assert "is not an absolute path" in capsys.readouterr().out
+
+
+def test_evaluate_with_resume(monkeypatch, tmp_path, capsys, step6_calls):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "results"))
+    run = make_run_folder(tmp_path)
+    step6_calls.result = EvaluationResult(run)
+    assert main(["--evaluate", str(run), "--resume"]) == 0
+    assert step6_calls == [run.resolve()] and step6_calls.resumed == [True]
+    assert "reusing its decisions where possible (--resume)" in capsys.readouterr().out
+
+
+def test_resume_needs_evaluate(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--resume"])
+    assert exit_info.value.code == 2
+    assert "--resume needs --evaluate" in capsys.readouterr().err
 
 
 def test_evaluate_cannot_be_combined_with_path(capsys):

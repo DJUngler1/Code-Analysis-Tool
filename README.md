@@ -43,13 +43,14 @@ After changes to the scheduler code, rebuild with `up -d --build` again.
 
 ### Configuration
 
-All settings are in one file, [`code-analysis.toml`](code-analysis.toml) in the repository root. The container mounts it read-only and reads it at every run, so changes need no rebuild, except for the OpenGrep rule sets (they are built into the image).
+All settings are in one file, [`code-analysis.toml`](code-analysis.toml) in the repository root. The container mounts the repository folder read-only (at `/app/repository`) and reads the file at every run, so changes need no rebuild, except for the OpenGrep rule sets (they are built into the image). The folder is mounted rather than the file, so saving the file in any way works while the container runs: a mounted single file would keep pointing to the old file when an editor saves by replacing it ("code-analysis.toml is missing"). After changing `docker/docker-compose.yml`, recreate the container (`docker compose -f docker/docker-compose.yml up -d`).
 
 | Section | Step | Content |
 |---|---|---|
 | `[opengrep]`, `[opengrep.rulesets.<name>]` | 3 | Active rule sets and their definitions |
 | `[tests]`, `[tests.mutation]` | 5 | Network and time limit of the test runs; scope and time limit of mutation testing |
 | `[llm]`, `[llm.decision]`, `[llm.report]` | 6 | Ollama address, report language, areas; the decision model and the reasoning model with their parameters |
+| `[llm.threat_model]` | before 2, 6 | How a missing threat model is made (`create`: drafted by the tool or written by you), how much documentation the draft reads, how much of it step 6 sees |
 
 ### Acceptance check (step 1)
 
@@ -72,7 +73,35 @@ Language shares are bytes of source code per language, as on GitHub. A `.h` file
 | 7 | Step 4 incomplete: Docker or a tool image missing, a dependency check failed, or a lock file could not be generated (completely) |
 | 8 | Step 5 incomplete: `[tests]` in `code-analysis.toml` invalid, Docker or a test image missing, or the tests of a suite could not be run (e.g. the build failed) or their coverage or mutation testing failed |
 | 9 | Step 6 incomplete: `[llm]` in `code-analysis.toml` invalid, Ollama unreachable or a model missing, or an area got no labels or not all texts from the models |
+| 10 | No confirmed threat model: no terminal to answer the questions (e.g. CI), aborted, `OUTPUT_DIR` missing, or no draft from the reasoning model |
 | 125 | (`bin/code-analysis` only) Docker or the container is not running |
+
+### Threat model (before step 2)
+
+Whether a security finding matters depends on facts the finding does not show: which data an attacker controls, and what is shipped. Step 6 therefore gets a threat model of the project, confirmed by the user. It answers three questions:
+
+1. What kind of software is this, and how is it used? (library, web server, app, CLI tool, …)
+2. Where does untrusted data come in? (the trust boundaries)
+3. What is shipped, and what is not? (tests, build tools, examples, …)
+
+After step 1 the tool looks for a confirmed threat model, in this order:
+
+1. `<project>/.code-analysis/threat-model.md`, committed to the project. It is used as it is, without confirmation in the terminal (step 1 only accepts a clean working tree, so it is committed), e.g. for CI.
+2. `<OUTPUT_DIR>/<project>/threat-model.md` with `threat-model.json`. The `.json` records the confirmation (time, SHA-256 of the text) and how the text was made. A text changed after its confirmation has to be confirmed again.
+
+**Writing the threat model yourself.** The threat model is a Markdown file; you can write it and put it in place yourself, with or without the tool:
+
+- **In the project:** write `.code-analysis/threat-model.md` and commit it. Every run uses it, also without a terminal. This is the way for CI and for threat models a team maintains with the code.
+- **In the results folder:** write `<OUTPUT_DIR>/<project>/threat-model.md` (`<project>` as in the names of the run folders). On the next run, the tool shows its path and asks you once to confirm it (`c`); after that it is used without asking.
+- **From the tool's template:** set `create = "manual"` in `[llm.threat_model]` of `code-analysis.toml`. If a project has no threat model, the tool writes a template with the headings and the three questions as hints (HTML comments, which the models do not see) to `<OUTPUT_DIR>/<project>/threat-model.md`; fill it in, save it and confirm it in the terminal. No model is involved.
+
+Use the headings of the template (`## Software and use`, `## Untrusted inputs (trust boundaries)`, `## Not attacker-controlled`, `## Shipped`, `## Not shipped`, `## Assumptions to check`), one line per list item, and be concrete: modules, folders, file formats, protocols. A file with headings only does not count.
+
+**Letting the tool draft it** (`create = "generate"`, the default). If a project has no threat model, the tool asks the three questions in the terminal (end an answer with an empty line). The reasoning model of `[llm.report]` writes a draft from the answers, the facts of step 1 (languages, package managers, top-level folders with their scope) and the project's `README*`, `SECURITY*` and `docs/` (up to `docs_kib`, prompt `threat_model.md`), and is unloaded again. The tool prints the path of the draft: read it, correct it in an editor, save it, and answer `c` (confirm), `r` (new answers, new draft; the previous draft is kept as `threat-model.md.previous`) or `a` (abort).
+
+Without a terminal and without a confirmed threat model, the tool stops with exit code 10.
+
+Each run copies the threat model it used into its folder (`threat-model.md`, `.json`); `--evaluate` uses the project's current one. Only the security area of step 6 uses it, in the decision and the report prompts, shortened to `context_chars` (`[llm.threat_model]` in `code-analysis.toml`). The decision model reads it once per question: for libgdx, up to about 1,200 characters cost no extra requests, 2,500 characters made 843 instead of 632 decision requests (`max_input_kib = 20`).
 
 ### Linters and formatters (step 2)
 
@@ -195,7 +224,7 @@ After step 5, two local models evaluate the results, as defined in [docs/LLMAudi
 - **The reasoning model** (`qwen3.8:latest`) writes the texts of the reports: titles, descriptions, recommendations, reasons and summaries. It never changes a label.
 - **The audit** (`audit.md`, `audit.json` in the run folder) is built by the tool from the reports.
 
-Both models must be installed in Ollama (`ollama pull <model>`); they are never loaded at the same time. The models and their parameters are set in `[llm]` of [`code-analysis.toml`](code-analysis.toml): what the models see (`[llm.input]`), each model's settings (`[llm.decision]`, `[llm.report]`, including time limit, repetitions and `think` as `true`/`false` or a level such as `"low"`), and optional settings of the reasoning model per area (`[llm.report.security]`, …). To run step 6 again on an earlier run, e.g. after changing a prompt: `bin/code-analysis --evaluate ~/code-analysis-results/<project>/<date_time>Z`.
+Both models must be installed in Ollama (`ollama pull <model>`); they are never loaded at the same time. The models and their parameters are set in `[llm]` of [`code-analysis.toml`](code-analysis.toml): what the models see (`[llm.input]`), each model's settings (`[llm.decision]`, `[llm.report]`, including time limit, repetitions and `think` as `true`/`false` or a level such as `"low"`), and optional settings of the reasoning model per area (`[llm.report.security]`, …). To run step 6 again on an earlier run, e.g. after changing a prompt: `bin/code-analysis --evaluate ~/code-analysis-results/<project>/<date_time>Z`. To continue where it stopped, e.g. after the reasoning model failed, add `--resume`: the decisions are reused where nothing that shaped them changed, and only the reports are written again (details in [docs/LLMAudit/README.md](docs/LLMAudit/README.md#running)).
 
 | Path | Content |
 |---|---|

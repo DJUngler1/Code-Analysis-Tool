@@ -128,9 +128,10 @@ areas = ["security", "code_quality", "test_quality"]  # areas to evaluate; leave
 message_chars = 300             # characters of a finding's message (or an advisory's summary) the models see
 code_chars = 400                # characters of the code excerpt around a finding
 code_context_lines = 2          # lines of code before and after the finding in the excerpt
-group_samples = 5               # sample locations per group of code quality findings
+group_samples = 5               # sample locations per group of findings (code quality and security groups)
 group_samples_with_code = 3     # how many of these samples include a code excerpt (at most group_samples)
 group_messages = 3              # different messages shown per group
+security_single_severity = "high"  # REAL security findings of this severity or higher get a text of their own ("high": also error, critical); the others get one text per rule (or package) and label
 failed_tests_per_group = 5      # test names shown per group of failed tests
 failure_message_chars = 600     # characters of the failure message of a group of failed tests
 declaration_chars = 300         # characters of the declarations (classes, functions) of a weakly tested file
@@ -150,7 +151,7 @@ model = "pplx-decider-flash:latest"  # the decision model; it must be installed 
 timeout_seconds = 300                # time limit per request, including loading the model
 retries = 2                          # repetitions of a failed request with one question (larger requests are split instead)
 keep_alive = "10m"                   # how long Ollama keeps the model loaded between requests ("10m", or seconds)
-max_questions = 4                    # questions (findings) per request; the endpoint allows at most 64
+max_questions = 4                   # questions (findings) per request; the endpoint allows at most 64
 max_input_kib = 20                   # text per request in KiB: the shared input once per question, plus the questions
 review_confidence = 0.6              # decisions with a lower confidence are flagged for review in the audit
 
@@ -158,18 +159,18 @@ review_confidence = 0.6              # decisions with a lower confidence are fla
 # JSON schema for the answer. It needs a build with structured output: GGUF
 # (llama.cpp), not MLX, which answers "HTTP 501: structured output is unavailable".
 [llm.report]
-model = "gpt-oss:20b"          # the reasoning model; it must be installed (`ollama pull <model>`)
+model = "gpt-oss:20b"   # the reasoning model; it must be installed (`ollama pull <model>`)
 timeout_seconds = 900          # time limit per request, including loading the model and its reasoning
 retries = 2                    # repetitions of a failed request, and of an answer that is not valid (with another seed)
 keep_alive = "10m"             # how long Ollama keeps the model loaded between requests ("10m", or seconds)
-think = true                   # reasoning before the answer: true, false, or a level of the model, e.g. "low", "medium", "high" (gpt-oss); false on a model that always reasons gives its lowest level
+think = "low"                # reasoning before the answer: true, false, or a level of the model, e.g. "low", "medium", "high" (gpt-oss); false on a model that always reasons gives its lowest level
 temperature = 0.6              # randomness of the text: 0 = always the most likely token, higher = more varied
 top_p = 0.95                   # only tokens within this cumulative probability are considered
 top_k = 20                     # only the 20 most likely tokens are considered
 # min_p = 0.0                  # tokens below this probability (relative to the most likely one) are left out; not set: the model's default
 seed = 42                      # random seed for reproducible answers; a repeated request uses seed + 1, seed + 2, ...
-num_ctx = 16384                # context window in tokens: prompt and answer together (more needs more memory)
-num_predict = 6144             # maximum tokens per answer, including the reasoning; must be smaller than num_ctx
+num_ctx = 65536                # context window in tokens: prompt and answer together (more needs more memory)
+num_predict = 8192             # maximum tokens per answer, including the reasoning; must be smaller than num_ctx
 entries_per_request = 10       # report entries written per request (fewer if they do not fit the context window)
 chars_per_token = 2.5          # estimate used to fit entries into num_ctx; lower is safer, higher packs more per request
 
@@ -184,3 +185,12 @@ chars_per_token = 2.5          # estimate used to fit entries into num_ctx; lowe
 
 [llm.report.test_quality]
 # num_predict = 8192           # e.g. longer answers for the test assessments
+
+# Threat model of the project (before step 2, see README "Threat model"): what an attacker controls and what
+# is shipped. The security decisions and reports of step 6 get the confirmed text. A threat model committed to
+# the project as .code-analysis/threat-model.md is always used as it is; the settings below only apply when a
+# project has no confirmed threat model yet.
+[llm.threat_model]
+create = "generate"            # "generate": you answer three questions, the reasoning model of [llm.report] drafts it from them and the project's README, SECURITY.md and docs/, you correct and confirm it; "manual": the tool writes a template, you write the threat model yourself and confirm it (no model)
+docs_kib = 24                  # KiB of README, SECURITY.md and docs/ the reasoning model reads for the draft (less if num_ctx is smaller); only for "generate"
+context_chars = 2500           # characters of the confirmed threat model the security decisions and reports see; longer ones are cut (each decision request repeats it per question: for libgdx up to about 1200 characters cost no extra requests)

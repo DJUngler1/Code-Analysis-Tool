@@ -40,7 +40,7 @@ services:
       PROJECTS_DIR: ${PROJECTS_DIR}
       OUTPUT_DIR: ${OUTPUT_DIR}
       HOST_HOME: ${HOME}
-      CONFIG_FILE: /app/code-analysis.toml
+      CONFIG_FILE: /app/repository/code-analysis.toml
       SONARQUBE_URL: http://sonarqube:9000
       # Without it, step 3 reports SonarQube as failed (see docker/.env.example).
       SONARQUBE_ADMIN_PASSWORD: ${SONARQUBE_ADMIN_PASSWORD:-}
@@ -60,13 +60,15 @@ services:
         target: ${OUTPUT_DIR}
         bind:
           create_host_path: true
-      # The tool's configuration file (code-analysis.toml: OpenGrep rule sets,
-      # tests, LLM evaluation), read at each run: changes need no rebuild of
-      # the scheduler. Editors that save by replacing the file can leave the
-      # container with the old version; then restart it (up -d).
+      # The repository, read-only, for the tool's configuration file
+      # (code-analysis.toml: OpenGrep rule sets, tests, LLM evaluation), read
+      # at each run: changes need no rebuild of the scheduler. The folder is
+      # mounted, not the file: editors (and tools) that save by replacing the
+      # file create a new file, and a mounted single file would keep pointing
+      # to the old, deleted one ("code-analysis.toml is missing").
       - type: bind
-        source: ../code-analysis.toml
-        target: /app/code-analysis.toml
+        source: ..
+        target: /app/repository
         read_only: true
       # Starts the tool containers. Project code (build scripts, analyzers)
       # only runs in those containers, which do not get the socket.

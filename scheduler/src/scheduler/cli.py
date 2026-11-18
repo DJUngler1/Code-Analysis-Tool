@@ -1,12 +1,15 @@
-"""Entry point: ask for the project, check it (step 1), run linters and formatters (step 2),
+"""Entry point: ask for the project, check it (step 1), make sure there is a confirmed threat model of the project
+(scheduler.threat_model), run linters and formatters (step 2),
 run the static code analysis (step 3), check the dependencies (step 4) and the tests (step 5),
 evaluate the results with local LLMs and write the audit (step 6).
 
-`--evaluate <run folder>` runs only step 6 on the results of an earlier run."""
+`--evaluate <run folder>` runs only step 6 on the results of an earlier run; with `--resume`, it reuses the
+decisions of that run's earlier evaluation and writes only the reports again."""
 
 from __future__ import annotations
 
 import argparse
+import sys
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -19,10 +22,12 @@ from scheduler.dependencies.run import scope_counts
 from scheduler.evaluation import EvaluationResult, run_evaluation
 from scheduler.evaluation.config import ConfigError as LlmConfigError
 from scheduler.evaluation.config import load_config as load_llm_config
+from scheduler.evaluation.items import project_of, read_json
 from scheduler.evaluation.ollama import model_key
 from scheduler.evaluation.run import AREA_NAMES, plural
 from scheduler.evaluation.run import STEP_DIR as EVALUATION_STEP_DIR
 from scheduler.linting import LintingResult, Status, run_linting
+from scheduler.linting.run import acceptance_facts, project_folder_name
 from scheduler.ollama import OllamaStatus, check_ollama
 from scheduler.paths import PathError, resolve_project_path, resolve_run_folder
 from scheduler.static_analysis import AnalysisResult, run_static_analysis
@@ -31,6 +36,7 @@ from scheduler.testing import TestingResult, run_tests
 from scheduler.testing.execute import describe_coverage, describe_mutation
 from scheduler.testing.run import STEP_DIR as TESTS_STEP_DIR
 from scheduler.testing.run import languages_without_tests
+from scheduler.threat_model import ThreatModelError, copy_to_run, ensure_threat_model, project_facts
 
 EXIT_INVALID_INPUT = 1
 # Step 2 could not run completely: OUTPUT_DIR, Docker or a tool image missing,
@@ -48,6 +54,9 @@ EXIT_TESTS_INCOMPLETE = 8
 # Step 6 could not run completely: code-analysis.toml ([llm]) invalid, Ollama unreachable or
 # a model missing, or an area got no labels or texts from the models.
 EXIT_EVALUATION_INCOMPLETE = 9
+# No confirmed threat model of the project, and none could be made: no terminal to answer the questions,
+# aborted by the user, OUTPUT_DIR missing, or no draft from the reasoning model.
+EXIT_THREAT_MODEL_MISSING = 10
 MAX_LISTED_MANIFESTS = 5
 MAX_LISTED_MODELS = 5
 MAX_LISTED_DIFFERENCES = 10
@@ -63,14 +72,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--evaluate", metavar="RUN_FOLDER",
         help="only run step 6 (LLM evaluation and audit) on the results folder of an earlier run",
     )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="with --evaluate: reuse the decisions of the run's earlier evaluation (same decision model, settings "
+             "and questions) and write only the reports again, e.g. with another reasoning model",
+    )
     args = parser.parse_args(argv)
     if args.evaluate is not None and (args.path is not None or args.check_only):
         parser.error("--evaluate cannot be combined with --path or --check-only")
+    if args.resume and args.evaluate is None:
+        parser.error("--resume needs --evaluate <run folder>")
     settings = Settings.from_env()
 
     try:
         if args.evaluate is not None:
-            return _evaluate_only(args.evaluate, settings)
+            return _evaluate_only(args.evaluate, settings, resume=args.resume)
         return _run(args.path, settings, check_only=args.check_only)
     except KeyboardInterrupt:
         print("\nInterrupted.")
@@ -102,12 +118,22 @@ def _run(path_arg: str | None, settings: Settings, *, check_only: bool = False) 
     if not result.accepted or check_only:
         return int(result.outcome)
 
+    print("\nThreat model – what an attacker controls and what is shipped (used by step 6) ...\n")
+    folder = settings.output_dir / project_folder_name(project) if settings.output_dir else None
+    try:
+        threat_model = ensure_threat_model(project, settings, folder=folder, interactive=_interactive(),
+                                           facts=project_facts(acceptance_facts(result), project))
+    except ThreatModelError as exc:
+        print(f"Error: {exc}")
+        return EXIT_THREAT_MODEL_MISSING
+
     print("\nStep 2 – linters and formatters (the formatters change files in the project) ...\n")
     linting = run_linting(result, settings)
     print(format_linting(linting))
     if linting.run_dir is None:
         print("\nStep 3 skipped: there is no results folder (see the error above).")
         return EXIT_LINTING_INCOMPLETE
+    copy_to_run(linting.run_dir, threat_model)
 
     # Runs even if a linter failed: the analysis does not depend on step 2.
     print("\nStep 3 – static code analysis (OpenGrep and SonarQube, in parallel) ...\n")
@@ -137,18 +163,34 @@ def _run(path_arg: str | None, settings: Settings, *, check_only: bool = False) 
     return int(result.outcome) if evaluation.complete else EXIT_EVALUATION_INCOMPLETE
 
 
-def _evaluate_only(raw: str, settings: Settings) -> int:
-    print("Code-Analysis-Tool – step 6 on the results of an earlier run\n")
+def _evaluate_only(raw: str, settings: Settings, *, resume: bool = False) -> int:
+    print("Code-Analysis-Tool – step 6 on the results of an earlier run"
+          + (", reusing its decisions where possible (--resume)" if resume else "") + "\n")
     print(describe_ollama(check_ollama(settings.ollama_base_url), required_models(settings)))
     try:
         run_dir = resolve_run_folder(raw, settings)
     except PathError as exc:
         print(f"Error: {exc}")
         return EXIT_INVALID_INPUT
+    print("\nThreat model – what an attacker controls and what is shipped (used by step 6) ...\n")
+    project = project_of(run_dir)
+    project = project if project is not None and project.is_dir() else None
+    try:  # the project's current threat model; a changed one makes --resume label security again
+        threat_model = ensure_threat_model(project, settings, folder=run_dir.parent, interactive=_interactive(),
+                                           facts=project_facts(read_json(run_dir / "run.json", {}), project))
+    except ThreatModelError as exc:
+        print(f"Error: {exc}")
+        return EXIT_THREAT_MODEL_MISSING
+    copy_to_run(run_dir, threat_model)
     print(f"\nStep 6 – LLM evaluation and audit of {run_dir} ...\n")
-    evaluation = run_evaluation(run_dir, settings)
+    evaluation = run_evaluation(run_dir, settings, resume=resume)
     print(format_evaluation(evaluation))
     return 0 if evaluation.complete else EXIT_EVALUATION_INCOMPLETE
+
+
+def _interactive() -> bool:
+    """A terminal to answer the threat model questions (bin/code-analysis passes -t only when there is one)."""
+    return sys.stdin.isatty()
 
 
 def prompt_for_project(settings: Settings) -> Path | None:

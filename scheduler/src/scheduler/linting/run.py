@@ -112,11 +112,15 @@ def run_linting(
     return result
 
 
+def project_folder_name(project: Path) -> str:
+    """The folder of a project's runs below OUTPUT_DIR (also holds its threat model)."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", project.name) or "project"
+
+
 def _new_run_dir(output_dir: Path, project: Path, started: datetime) -> Path:
-    name = re.sub(r"[^A-Za-z0-9._-]+", "_", project.name) or "project"
     # The container has no local time zone: name the folder in UTC, marked "Z".
     stamp = started.strftime("%Y-%m-%d_%H%M%S") + ("Z" if started.utcoffset() == timezone.utc.utcoffset(None) else "")
-    base = output_dir / name / stamp
+    base = output_dir / project_folder_name(project) / stamp
     candidate, counter = base, 1
     while candidate.exists():
         counter += 1
@@ -140,11 +144,18 @@ def mount_root(project: Path, projects_dir: Path | None) -> Path:
 
 
 def _run_info(acceptance: AcceptanceResult, started: datetime) -> dict:
-    languages = acceptance.languages
     return {
         "project": str(acceptance.project),
         "commit": head_commit(acceptance.project),
         "started": started.isoformat(timespec="seconds"),
+        **acceptance_facts(acceptance),
+    }
+
+
+def acceptance_facts(acceptance: AcceptanceResult) -> dict:
+    """Languages and package managers of step 1, as in run.json (also the facts of the threat model draft)."""
+    languages = acceptance.languages
+    return {
         "languages": {
             "primary": languages.primary,
             "others": list(languages.others),

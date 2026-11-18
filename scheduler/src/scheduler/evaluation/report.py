@@ -3,7 +3,11 @@
 Python merges the duplicates into entries, counts, sorts and numbers them
 (E-001, G-001), and computes the formatter statistics and the example diff
 from changes.patch. Every input id ends up in exactly one entry's
-`source_ids`.
+`source_ids`. In the security report, REAL findings of at least
+`security_single_severity` ([llm.input]) get an entry each; the other
+findings are grouped by rule (or package) and label, and the model writes
+one text per group. Each finding keeps its own decision and location in the
+group's `findings`.
 
 The reasoning model (/api/chat with a JSON schema) only writes texts:
 - per entry: a title, and either a description and a recommendation (labels
@@ -30,9 +34,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from scheduler.evaluation.config import InputConfig, ReportConfig
-from scheduler.evaluation.items import LINT_DIR, SEVERITY_RANK, AreaItems, read_json
+from scheduler.evaluation.items import (LINT_DIR, SEVERITY_RANK, AreaItems, compact, highest, read_json,
+                                        spread_samples)
 from scheduler.evaluation.ollama import Exchange, OllamaClient
 from scheduler.evaluation.prompts import render, report_prompt
+from scheduler.evaluation.threat import NO_THREAT_MODEL
 
 # Labels that call for action: their entries get a description and a recommendation.
 ACTION_LABELS = ("REAL", "PROJECT", "CRITICAL", "TEST_GAP")
@@ -150,56 +156,161 @@ def _run_tools(tools: list[dict]) -> list[dict]:
 # --- security ---
 
 
+def _security_entry(item: dict, decision: dict) -> dict:
+    """One finding of step 3 or 4 (with its duplicates) as a report entry."""
+    data = item["data"]
+    static = item["kind"] == "static"
+    identifiers = data.get("advisories", [])
+    also = data.get("also_reported_as", [])
+    return {
+        "label": decision["label"],
+        "category": "static" if static else "dependency",
+        "severity": data.get("severity"),
+        "count": 1,
+        "source_ids": [item["id"], *item.get("duplicates", [])],
+        "tools": sorted({data["tool"], *(other.split(": ", 1)[0] for other in also)}) if static
+        else data.get("tools", []),
+        "identifiers": {
+            "rule_ids": sorted({data.get("rule"), *(other.split(": ", 1)[-1] for other in also)} - {None})
+            if static else [],
+            "cwe": data.get("cwe", []),
+            "cve": [identifier for identifier in identifiers if identifier.upper().startswith("CVE-")],
+            "other": [identifier for identifier in identifiers if not identifier.upper().startswith("CVE-")],
+        },
+        "locations": [{"file": data.get("file"), "line": data.get("line")}] if static and data.get("file") else [],
+        "scope": data.get("scope"),
+        "package": None if static else {
+            "name": data.get("package"), "ecosystem": data.get("ecosystem"),
+            "installed_version": data.get("version"), "fixed_versions": data.get("fixed_versions", []),
+            "manifests": data.get("manifests", []), "scope": data.get("scope"),
+        },
+        "message": data.get("message") if static else data.get("summary"),
+        "url": data.get("url"),
+        **_decision_fields(decision),
+    }
+
+
+def _security_group_key(item: dict, label: str) -> tuple:
+    """Findings of the same rule (static analysis) or package (dependencies) with the same label form a group."""
+    data = item["data"]
+    if item["kind"] == "static":
+        return ("static", data.get("tool"), data.get("rule"), label)
+    return ("dependency", data.get("ecosystem"), data.get("package"), label)
+
+
+def _security_group(members: list[tuple[dict, dict]], limits: InputConfig) -> tuple[dict, dict]:
+    """Several findings of one group as one entry, with every finding kept; and what the model sees of it."""
+    members = sorted(members, key=lambda member: (str(member[0]["data"].get("file") or ""),
+                                                  member[0]["data"].get("line") or 0, member[0]["id"]))
+    findings = [_security_entry(item, decision) for item, decision in members]
+    first = findings[0]
+    static = first["category"] == "static"
+    severities = [finding["severity"] for finding in findings]
+    confidences = [finding["confidence"] for finding in findings if finding["confidence"] is not None]
+    decided_by = {finding["decided_by"] for finding in findings}
+    low = sum(1 for finding in findings if finding["review"])
+    messages = list(dict.fromkeys(finding["message"] for finding in findings if finding["message"]))
+    locations = [location for finding in findings for location in finding["locations"]]
+    entry = {
+        "label": first["label"],
+        "category": first["category"],
+        "severity": highest(severities),
+        "severities": by_severity(severities),
+        "count": len(findings),
+        "files": len({location["file"] for location in locations}),
+        "source_ids": [source for finding in findings for source in finding["source_ids"]],
+        "tools": sorted({tool for finding in findings for tool in finding["tools"]}),
+        "identifiers": {key: sorted({value for finding in findings for value in finding["identifiers"][key] or []})
+                        for key in ("rule_ids", "cwe", "cve", "other")},
+        "locations": locations,
+        "scope": None,
+        "scopes": dict(Counter(finding["scope"] or "unknown" for finding in findings).most_common()),
+        "package": None if static else {
+            "name": first["package"]["name"], "ecosystem": first["package"]["ecosystem"],
+            "installed_versions": sorted({finding["package"]["installed_version"] for finding in findings
+                                          if finding["package"]["installed_version"]}),
+            "fixed_versions": sorted({version for finding in findings
+                                      for version in finding["package"]["fixed_versions"] or []}),
+            "manifests": sorted({manifest for finding in findings
+                                 for manifest in finding["package"]["manifests"] or []}),
+        },
+        "message": None,
+        "messages": messages[:limits.group_messages],
+        "url": None,
+        "confidence": min(confidences) if confidences else None,  # the lowest of the group
+        "review": low > 0,
+        "low_confidence_findings": low,
+        "decided_by": decided_by.pop() if len(decided_by) == 1 else "mixed",
+        # Every finding with its own decision: the group only bundles the texts.
+        "findings": [{key: value for key, value in finding.items() if key not in ("label", "category", "count")}
+                     for finding in findings],
+    }
+    data = [item["data"] for item, _ in members]
+    samples = spread_samples(data, limits.group_samples)
+    shown: dict = {"label": entry["label"], "count": entry["count"]}
+    if low:  # low_confidence as for a single finding (the prompt refers to it), with how many of the group
+        shown |= {"low_confidence": True, "low_confidence_findings": low}
+    if static:
+        shown |= {"tool": data[0].get("tool"), "rule": data[0].get("rule"), "category": data[0].get("category"),
+                  "cwe": entry["identifiers"]["cwe"], "severities": entry["severities"], "files": entry["files"],
+                  "scopes": entry["scopes"], "messages": entry["messages"],
+                  "samples": [compact({"file": sample.get("file"), "line": sample.get("line"),
+                                       "scope": sample.get("scope"), "severity": sample.get("severity"),
+                                       "code": sample.get("code") if index < limits.group_samples_with_code else None})
+                              for index, sample in enumerate(samples)]}
+    else:
+        package = entry["package"]
+        shown |= {"package": package["name"], "ecosystem": package["ecosystem"],
+                  "installed_versions": package["installed_versions"], "fixed_versions": package["fixed_versions"],
+                  "severities": entry["severities"], "scopes": entry["scopes"],
+                  "samples": [compact({"advisories": sample.get("advisories"), "severity": sample.get("severity"),
+                                       "installed_version": sample.get("version"),
+                                       "fixed_versions": sample.get("fixed_versions"), "summary": sample.get("summary"),
+                                       "manifests": sample.get("manifests")}) for sample in samples]}
+    return entry, compact(shown)
+
+
 def build_security(area: AreaItems, decisions: dict[str, dict], run_dir: Path, limits: InputConfig) -> Draft:
-    rows: list[tuple[str, dict, dict, dict]] = []
-    inputs: dict[str, dict] = {}
+    """REAL findings of at least `security_single_severity` get an entry each; the others are grouped."""
+    single_rank = severity_rank(limits.security_single_severity)
+    rows: list[tuple[dict, Callable[[str], dict]]] = []
     labels: list[str] = []
+    low_confidence = 0
+    real_severities: list[str | None] = []
+    groups: dict[tuple, list[tuple[dict, dict]]] = defaultdict(list)
     for item in area.items:
         decision = _decision(decisions, item["id"], "REAL")
-        data = item["data"]
         labels += [decision["label"]] + ["DUPLICATE"] * len(item.get("duplicates", []))
-        static = item["kind"] == "static"
-        identifiers = data.get("advisories", [])
-        also = data.get("also_reported_as", [])
-        entry = {
-            "label": decision["label"],
-            "category": "static" if static else "dependency",
-            "severity": data.get("severity"),
-            "source_ids": [item["id"], *item.get("duplicates", [])],
-            "tools": sorted({data["tool"], *(other.split(": ", 1)[0] for other in also)}) if static
-            else data.get("tools", []),
-            "identifiers": {
-                "rule_ids": sorted({data.get("rule"), *(other.split(": ", 1)[-1] for other in also)} - {None})
-                if static else [],
-                "cwe": data.get("cwe", []),
-                "cve": [identifier for identifier in identifiers if identifier.upper().startswith("CVE-")],
-                "other": [identifier for identifier in identifiers if not identifier.upper().startswith("CVE-")],
-            },
-            "locations": [{"file": data.get("file"), "line": data.get("line")}] if static and data.get("file") else [],
-            "scope": data.get("scope"),
-            "package": None if static else {
-                "name": data.get("package"), "ecosystem": data.get("ecosystem"),
-                "installed_version": data.get("version"), "fixed_versions": data.get("fixed_versions", []),
-                "manifests": data.get("manifests", []), "scope": data.get("scope"),
-            },
-            "message": data.get("message") if static else data.get("summary"),
-            "url": data.get("url"),
-            **_decision_fields(decision),
-        }
-        rows.append((item["id"], entry, decision, data))
-    ordered = sorted(rows, key=lambda row: (label_rank(row[1]["label"]), -severity_rank(row[1]["severity"]), row[0]))
+        low_confidence += bool(decision.get("review"))
+        if decision["label"] == "REAL":
+            real_severities.append(item["data"].get("severity"))
+        if decision["label"] in ACTION_LABELS and severity_rank(item["data"].get("severity")) >= single_rank:
+            rows.append(_single_row(item, decision))
+        else:
+            groups[_security_group_key(item, decision["label"])].append((item, decision))
+    for members in groups.values():
+        if len(members) == 1:  # a group of one is an entry like any single finding
+            rows.append(_single_row(*members[0]))
+        else:
+            entry, shown = _security_group(members, limits)
+            rows.append((entry, lambda entry_id, shown=shown: {"id": entry_id, **shown}))
+    ordered = sorted(rows, key=lambda row: (label_rank(row[0]["label"]), -severity_rank(row[0]["severity"]),
+                                            -row[0]["count"], row[0]["source_ids"][0]))
     report_entries = []
-    for number, (_, entry, decision, data) in enumerate(ordered, start=1):
+    inputs: dict[str, dict] = {}
+    for number, (entry, model_input) in enumerate(ordered, start=1):
         entry_id = f"E-{number:03d}"
         report_entries.append(_empty_texts({"entry_id": entry_id, **entry}))
-        inputs[entry_id] = _model_input(entry_id, decision, data)
+        inputs[entry_id] = model_input(entry_id)
     real = [entry for entry in report_entries if entry["label"] == "REAL"]
     statistics = {
         "input_findings": len(labels),
         "by_label": _label_counts(labels),
         "report_entries": len(report_entries),
-        "real_by_severity": by_severity([entry["severity"] for entry in real]),
-        "low_confidence": sum(1 for entry in report_entries if entry["review"]),
+        "groups": sum(1 for entry in report_entries if entry["count"] > 1),
+        "single_severity": limits.security_single_severity,
+        "real_by_severity": by_severity(real_severities),
+        "low_confidence": low_confidence,
         # Findings of step 3 with another category than security, correctness or reliability: in code quality.
         "static_findings_in_code_quality": area.facts.get("static_in_code_quality", 0),
     }
@@ -221,12 +332,23 @@ def build_security(area: AreaItems, decisions: dict[str, dict], run_dir: Path, l
         "tools": report["run"]["tools"],
         "dependency_coverage": area.facts.get("coverage", []),
         "notes": area.notes,
-        "real_entries": [{"id": entry["entry_id"], "severity": entry["severity"], "category": entry["category"]}
-                         for entry in real],
-        "filtered_entries": [{"id": entry["entry_id"], "label": entry["label"]}
-                             for entry in report_entries if entry["label"] != "REAL"],
+        "real_entries": [{"id": entry["entry_id"], "severity": entry["severity"], "category": entry["category"],
+                          "count": entry["count"], **_subject(entry)} for entry in real],
+        "filtered_entries": [{"id": entry["entry_id"], "label": entry["label"], "count": entry["count"],
+                              **_subject(entry)} for entry in report_entries if entry["label"] != "REAL"],
     }
     return Draft(report, inputs, facts, {"summary_text": "text", "run_notes": "text"})
+
+
+def _single_row(item: dict, decision: dict) -> tuple[dict, Callable[[str], dict]]:
+    return _security_entry(item, decision), lambda entry_id: _model_input(entry_id, decision, item["data"])
+
+
+def _subject(entry: dict) -> dict:
+    """What a security entry is about, for the summary facts: its rules or its package."""
+    if entry["package"]:
+        return {"package": entry["package"]["name"]}
+    return {"rules": entry["identifiers"]["rule_ids"]}
 
 
 # --- code quality ---
@@ -520,7 +642,8 @@ class TextWriter:
     """Asks the reasoning model for the texts of one area and validates the answers."""
 
     def __init__(self, client: OllamaClient, config: ReportConfig, *, area: str, language: str, retries: int,
-                 log: Callable[[Exchange], None] = lambda exchange: None, out: Callable[[str], None] = print):
+                 threat_model: str = "", log: Callable[[Exchange], None] = lambda exchange: None,
+                 out: Callable[[str], None] = print):
         self.client = client
         self.config = config
         self.area = area
@@ -528,7 +651,9 @@ class TextWriter:
         self.log = log
         self.out = out
         self.prompt = report_prompt(PROMPTS[area])
-        self.system = render(self.prompt["System"], REPORT_LANGUAGE=language)
+        # {{THREAT_MODEL}}: only the security prompt has it.
+        self.system = render(self.prompt["System"], REPORT_LANGUAGE=language,
+                             THREAT_MODEL=threat_model or NO_THREAT_MODEL)
         self.stats = ReportStats()
         # What fits into one request: the context window minus the answer, in characters.
         self.budget = int((config.num_ctx - config.num_predict) * config.chars_per_token) - len(self.system)

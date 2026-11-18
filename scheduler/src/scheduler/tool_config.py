@@ -23,7 +23,10 @@ def read_config(path: Path | None) -> dict:
     try:
         return tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise ConfigFileError(f"{path} is missing.") from exc
+        raise ConfigFileError(f"{path} is missing. In the container it comes from {CONFIG_FILE} in the repository "
+                              "root (docker/docker-compose.yml): check that the file is there. If it is, the "
+                              "container still uses an old mount; recreate it from the repository root with "
+                              "`docker compose -f docker/docker-compose.yml up -d --force-recreate`.") from exc
     except OSError as exc:
         raise ConfigFileError(f"{path} cannot be read: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:

@@ -17,6 +17,9 @@ MAX_REQUEST_KIB = 64  # local limit of the decision endpoint (text and questions
 # Keys of [llm] itself; base_url is read by scheduler.config (OLLAMA_BASE_URL overrides it).
 LLM_KEYS = ("base_url", "report_language", "areas")
 MOVED_TO_MODELS = ("timeout_seconds", "retries", "keep_alive")
+THREAT_MODEL_CREATE = ("generate", "manual")  # [llm.threat_model] create
+# Severities of the findings (normalized by steps 2 to 4), for security_single_severity.
+SEVERITIES = ("critical", "high", "error", "medium", "warning", "low", "note", "info")
 
 
 class ConfigError(Exception):
@@ -30,9 +33,12 @@ class InputConfig:
     message_chars: int = 300  # message of a finding, summary of an advisory
     code_chars: int = 400  # code excerpt around a finding
     code_context_lines: int = 2  # lines before and after the finding in the excerpt
-    group_samples: int = 5  # sample locations per group of findings (code quality)
+    group_samples: int = 5  # sample locations per group of findings (code quality, security)
     group_samples_with_code: int = 3  # of these, the first ones with a code excerpt
     group_messages: int = 3  # different messages per group
+    # Security report: REAL findings of this severity or higher get an entry of their own ("high": high, error,
+    # critical); the other findings are grouped by rule (or package) and label.
+    security_single_severity: str = "high"
     failed_tests_per_group: int = 5  # test names per group of failed tests
     failure_message_chars: int = 600  # failure message of a group of failed tests
     declaration_chars: int = 300  # declarations (classes, functions) of a weakly tested file
@@ -79,6 +85,17 @@ class ReportConfig:
 
 
 @dataclass(frozen=True)
+class ThreatModelConfig:
+    """The project's threat model (scheduler.threat_model), if the project has no confirmed one yet."""
+
+    # "generate": three questions, the reasoning model of [llm.report] drafts it, the user corrects and confirms it;
+    # "manual": the tool writes a template, the user writes the threat model and confirms it (no model).
+    create: str = "generate"
+    docs_kib: int = 24  # README, SECURITY.md and docs/ the reasoning model reads for the draft
+    context_chars: int = 2500  # characters of the confirmed threat model the security decisions and reports see
+
+
+@dataclass(frozen=True)
 class LlmConfig:
     report_language: str = "English"
     areas: tuple[str, ...] = AREAS
@@ -87,6 +104,7 @@ class LlmConfig:
     report: ReportConfig = field(default_factory=ReportConfig)
     # [llm.report.<area>]: the keys an area sets differently from [llm.report].
     report_overrides: dict[str, dict] = field(default_factory=dict)
+    threat_model: ThreatModelConfig = field(default_factory=ThreatModelConfig)
 
     def report_for(self, area: str) -> ReportConfig:
         """The reasoning model's settings for one area: [llm.report] with the area's own values."""
@@ -98,7 +116,7 @@ def load_config(path: Path | None) -> LlmConfig:
     try:
         data = read_config(path)
         llm = section(data, path, "llm")
-        _known_keys(llm, LLM_KEYS + ("input", "decision", "report"), path, "llm")
+        _known_keys(llm, LLM_KEYS + ("input", "decision", "report", "threat_model"), path, "llm")
         areas = llm.get("areas", list(AREAS))
         if not isinstance(areas, list) or not areas or any(area not in AREAS for area in areas):
             raise ConfigFileError(f"{path}: llm.areas must list one or more of {', '.join(AREAS)}.")
@@ -122,9 +140,25 @@ def load_config(path: Path | None) -> LlmConfig:
             decision=_decision(section(data, path, "llm.decision"), path),
             report=report,
             report_overrides=overrides,
+            threat_model=_threat_model(section(data, path, "llm.threat_model"), path),
         )
     except ConfigFileError as exc:
         raise ConfigError(str(exc)) from exc
+
+
+def _threat_model(table: dict, path: Path | None) -> ThreatModelConfig:
+    name = "llm.threat_model"
+    defaults = ThreatModelConfig()
+    _known_keys(table, tuple(item.name for item in fields(ThreatModelConfig)), path, name)
+    create = text(table, "create", defaults.create, path, name).lower()
+    if create not in THREAT_MODEL_CREATE:
+        raise ConfigFileError(f'{path}: {name}.create must be "generate" (the tool drafts the threat model from three '
+                              'questions) or "manual" (you write it from a template).')
+    return ThreatModelConfig(
+        create=create,
+        docs_kib=whole_number(table, "docs_kib", defaults.docs_kib, path, name),
+        context_chars=whole_number(table, "context_chars", defaults.context_chars, path, name, minimum=200),
+    )
 
 
 def _known_keys(table: dict, allowed: tuple[str, ...], path: Path | None, name: str) -> None:
@@ -207,7 +241,12 @@ def _input(table: dict, path: Path | None) -> InputConfig:
     values = {}
     for item in fields(InputConfig):
         default = getattr(defaults, item.name)
-        if item.name == "weak_line_rate":
+        if item.name == "security_single_severity":
+            value = text(table, item.name, default, path, name).lower()
+            if value not in SEVERITIES:
+                raise ConfigFileError(f"{path}: {name}.{item.name} must be one of {', '.join(SEVERITIES)}.")
+            values[item.name] = value
+        elif item.name == "weak_line_rate":
             values[item.name] = number(table, item.name, default, path, name, maximum=1.0)
         elif item.name == "code_context_lines":
             values[item.name] = whole_number(table, item.name, default, path, name)
