@@ -45,9 +45,10 @@ class EarlierDecisions:
 
 
 def write_decisions_info(folder: Path, model: dict, config: DecisionConfig, started: str,
-                         stats: DecisionStats) -> None:
+                         stats: DecisionStats, *, inputs: dict | None = None, threat_model: dict | None = None) -> None:
+    """Also what the model saw ([llm.input], the threat model): a run stopped after the decisions has no summary."""
     _write_json(folder / DECISIONS_INFO, {"started": started, "model": model, "settings": asdict(config),
-                                          "stats": stats.to_json()})
+                                          "stats": stats.to_json(), "input": inputs, "threat_model": threat_model})
 
 
 def prepare_resume(step_dir: Path) -> None:

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
-from scheduler.tool_config import ConfigFileError, number, read_config, section, text, whole_number
+from scheduler.tool_config import ConfigFileError, flag, number, read_config, section, text, whole_number
 
 AREAS = ("security", "code_quality", "test_quality")
 MAX_QUESTIONS = 64  # limit of Ollama's decision endpoint
@@ -33,6 +33,9 @@ class InputConfig:
     message_chars: int = 300  # message of a finding, summary of an advisory
     code_chars: int = 400  # code excerpt around a finding
     code_context_lines: int = 2  # lines before and after the finding in the excerpt
+    # Comments left out of the code the models see (// and /* */, or # for Python; line numbers stay). For
+    # benchmarks whose comments tell which code is safe; off for real projects, where comments are context.
+    strip_comments: bool = False
     group_samples: int = 5  # sample locations per group of findings (code quality, security)
     group_samples_with_code: int = 3  # of these, the first ones with a code excerpt
     group_messages: int = 3  # different messages per group
@@ -67,7 +70,7 @@ class ReportConfig:
     think: bool | str = True  # or a level the model supports, e.g. "low", "medium", "high"
     temperature: float = 0.6
     top_p: float = 0.95
-    top_k: int = 20
+    top_k: int | None = None  # None (key not set): not sent, Ollama's or the model's default applies
     min_p: float | None = None  # None: not sent, the model's default applies
     seed: int = 42
     num_ctx: int = 16384
@@ -77,10 +80,11 @@ class ReportConfig:
 
     def options(self) -> dict:
         """Ollama's generation options for /api/chat."""
-        options = {"temperature": self.temperature, "top_p": self.top_p, "top_k": self.top_k, "seed": self.seed,
+        options = {"temperature": self.temperature, "top_p": self.top_p, "seed": self.seed,
                    "num_ctx": self.num_ctx, "num_predict": self.num_predict}
-        if self.min_p is not None:
-            options["min_p"] = self.min_p
+        for name in ("top_k", "min_p"):  # only sent when set
+            if getattr(self, name) is not None:
+                options[name] = getattr(self, name)
         return options
 
 
@@ -202,6 +206,7 @@ def _report(table: dict, path: Path | None, name: str, defaults: ReportConfig) -
     settings = {key: value for key, value in table.items() if not isinstance(value, dict)}
     _known_keys(settings, tuple(item.name for item in fields(ReportConfig)), path, name)
     min_p = settings.get("min_p", defaults.min_p)
+    top_k = settings.get("top_k", defaults.top_k)
     num_ctx = whole_number(settings, "num_ctx", defaults.num_ctx, path, name, minimum=2048)
     num_predict = whole_number(settings, "num_predict", defaults.num_predict, path, name, minimum=256)
     if num_predict >= num_ctx:
@@ -213,7 +218,7 @@ def _report(table: dict, path: Path | None, name: str, defaults: ReportConfig) -
         think=_think(settings.get("think", defaults.think), path, name),
         temperature=number(settings, "temperature", defaults.temperature, path, name, maximum=2.0),
         top_p=number(settings, "top_p", defaults.top_p, path, name, maximum=1.0),
-        top_k=whole_number(settings, "top_k", defaults.top_k, path, name, minimum=1),
+        top_k=None if top_k is None else whole_number({"top_k": top_k}, "top_k", 1, path, name, minimum=1),
         min_p=None if min_p is None else number({"min_p": min_p}, "min_p", 0.0, path, name, maximum=1.0),
         seed=whole_number(settings, "seed", defaults.seed, path, name),
         num_ctx=num_ctx,
@@ -246,6 +251,8 @@ def _input(table: dict, path: Path | None) -> InputConfig:
             if value not in SEVERITIES:
                 raise ConfigFileError(f"{path}: {name}.{item.name} must be one of {', '.join(SEVERITIES)}.")
             values[item.name] = value
+        elif item.name == "strip_comments":
+            values[item.name] = flag(table, item.name, default, path, name)
         elif item.name == "weak_line_rate":
             values[item.name] = number(table, item.name, default, path, name, maximum=1.0)
         elif item.name == "code_context_lines":

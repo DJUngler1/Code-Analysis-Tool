@@ -3,7 +3,7 @@
 import pytest
 from evaluation_data import add_quality_findings, make_run
 
-from scheduler.evaluation.config import ConfigError, LlmConfig, load_config
+from scheduler.evaluation.config import ConfigError, InputConfig, LlmConfig, load_config
 from scheduler.evaluation.items import (SourceReader, code_quality_items, failure_cause, is_security, path_scope,
                                         project_of, security_items, test_items)
 from scheduler.evaluation.prompts import decision_prompt, render, report_prompt
@@ -214,3 +214,50 @@ def test_test_items(tmp_path):
 def test_failure_cause_ignores_numbers_paths_and_quotes():
     assert failure_cause("AssertionError: 'a' != 'b' at /x/y.py:12") == failure_cause("AssertionError: 'c' != 'd' "
                                                                                        "at /z.py:3")
+
+
+def test_top_k_and_min_p_are_only_sent_when_set(tmp_path):
+    config = tmp_path / "code-analysis.toml"
+    config.write_text("[llm.report]\ntemperature = 1.0\ntop_p = 1.0\n")
+    options = load_config(config).report.options()
+    assert "top_k" not in options and "min_p" not in options and options["top_p"] == 1.0
+    config.write_text("[llm.report]\ntop_k = 20\n[llm.report.security]\nmin_p = 0.05\n")
+    loaded = load_config(config)
+    assert loaded.report.options()["top_k"] == 20 and loaded.report_for("security").options()["min_p"] == 0.05
+
+
+# --- [llm.input] strip_comments ---
+
+
+def test_strip_comments_keeps_strings_and_line_numbers():
+    from scheduler.evaluation.items import strip_comments
+
+    java = ('int a = 1; // safe value\n/* block\n   comment */ int b = 2;\n'
+            'String u = "http://x/*y*/"; char c = \'/\';\nbar = list.get(1); // get the last \'safe\' value\n')
+    stripped = strip_comments(java, ".java")
+    assert stripped.count("\n") == java.count("\n")
+    assert "safe" not in stripped and "block" not in stripped
+    assert '"http://x/*y*/"' in stripped and "char c = '/';" in stripped and "bar = list.get(1);" in stripped
+    python = 'x = "a # b"  # comment\n"""doc # stays"""\n'
+    assert strip_comments(python, ".py") == 'x = "a # b"  \n"""doc # stays"""\n'
+    rust = "fn f<'a>(x: &'a str) {} // c\nlet c = 'x';\n"
+    assert strip_comments(rust, ".rs") == "fn f<'a>(x: &'a str) {} \nlet c = 'x';\n"
+    assert strip_comments("echo # not a known language\n", ".sh") == "echo # not a known language\n"
+
+
+def test_excerpts_without_comments(tmp_path):
+    project = tmp_path / "project"
+    (project / "src").mkdir(parents=True)
+    (project / "src" / "App.java").write_text("int a = 1;\n// the next line is safe\nrun(a);\n")
+    with_comments = SourceReader(project, InputConfig(code_context_lines=1)).snippet("src/App.java", 3)
+    without = SourceReader(project, InputConfig(code_context_lines=1, strip_comments=True)).snippet("src/App.java", 3)
+    assert "safe" in with_comments and "safe" not in without and "3: run(a);" in without
+
+
+def test_strip_comments_setting(tmp_path):
+    config = tmp_path / "code-analysis.toml"
+    config.write_text("[llm.input]\nstrip_comments = true\n")
+    assert load_config(config).input.strip_comments is True
+    config.write_text('[llm.input]\nstrip_comments = "yes"\n')
+    with pytest.raises(ConfigError, match="strip_comments must be true or false"):
+        load_config(config)

@@ -118,7 +118,10 @@ class SourceReader:
             path = (self.project / file).resolve()
             try:
                 if path.is_relative_to(self.project) and path.is_file() and path.stat().st_size <= MAX_SOURCE_BYTES:
-                    self._lines[file] = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                    if self.limits.strip_comments:
+                        text = strip_comments(text, path.suffix.lower())
+                    self._lines[file] = text.splitlines()
             except OSError:
                 pass
         return self._lines[file]
@@ -140,6 +143,70 @@ class SourceReader:
             return None
         found = [line.strip() for line in lines if _DECLARATION.match(line)]
         return clip("\n".join(found), self.limits.declaration_chars) if found else None
+
+
+# [llm.input] strip_comments: languages with // and /* */ comments, and with # comments.
+C_LIKE_SUFFIXES = {".java", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx", ".cs", ".js", ".jsx", ".mjs",
+                   ".cjs", ".ts", ".tsx", ".mts", ".cts", ".rs", ".kt", ".kts", ".scala", ".go", ".swift", ".groovy",
+                   ".gradle"}
+HASH_SUFFIXES = {".py", ".pyi"}
+# Languages whose single quotes delimit strings; elsewhere 'x' is a character (or a Rust lifetime).
+SINGLE_QUOTE_STRINGS = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi"}
+
+
+def strip_comments(text: str, suffix: str) -> str:
+    """The source without comments (// and /* */, or # for Python); strings stay, line numbers stay.
+
+    For [llm.input] strip_comments: comments can tell a model what the code does instead of the code itself,
+    e.g. in benchmarks that explain in comments which branch is safe. Other languages stay as they are."""
+    if suffix not in C_LIKE_SUFFIXES and suffix not in HASH_SUFFIXES:
+        return text
+    hash_comments = suffix in HASH_SUFFIXES
+    string_quotes = "\"'`" if suffix in SINGLE_QUOTE_STRINGS else "\""
+    out: list[str] = []
+    index, length = 0, len(text)
+    while index < length:
+        char = text[index]
+        pair = text[index:index + 2]
+        if (hash_comments and char == "#") or (not hash_comments and pair == "//"):
+            end = text.find("\n", index)
+            index = length if end == -1 else end  # the newline itself is kept
+            continue
+        if not hash_comments and pair == "/*":
+            end = text.find("*/", index + 2)
+            stop = length if end == -1 else end + 2
+            out.append("\n" * text.count("\n", index, stop))  # keep the line numbers
+            index = stop
+            continue
+        if char in string_quotes or char == "'":
+            delimiter = text[index:index + 3] if text[index:index + 3] in ('"""', "'''") else char
+            stop = _string_stop(text, index + len(delimiter), delimiter)
+            if char not in string_quotes and stop - index > 6:
+                out.append(char)  # no character literal ('x', '\n'), e.g. a Rust lifetime: plain text
+                index += 1
+                continue
+            out.append(text[index:stop])
+            index = stop
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _string_stop(text: str, index: int, delimiter: str) -> int:
+    """Where the string ends: after its closing delimiter (escapes skipped). A string on one line that is not
+    closed ends at the end of the line; a multi-line string (triple quotes, backticks) at the end of the text."""
+    multi_line = len(delimiter) == 3 or delimiter == "`"
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text.startswith(delimiter, index):
+            return index + len(delimiter)
+        if not multi_line and text[index] == "\n":
+            return index
+        index += 1
+    return len(text)
 
 
 def clip(text: str | None, limit: int) -> str | None:

@@ -33,6 +33,7 @@ Five kinds of table in [`code-analysis.toml`](../../code-analysis.toml), read at
 | `message_chars` | 300 | Characters of a finding's message or an advisory's summary |
 | `code_chars` | 400 | Characters of the code excerpt around a finding |
 | `code_context_lines` | 2 | Lines of code before and after the finding |
+| `strip_comments` | `false` | Leave comments out of the code the models see (`//` and `/* */`, or `#` for Python; strings and line numbers stay). For benchmarks whose comments tell which code is safe; keep `false` for real projects, where comments are context |
 | `group_samples` | 5 | Sample locations per group of findings (code quality and security groups) |
 | `group_samples_with_code` | 3 | How many of these samples include a code excerpt (at most `group_samples`) |
 | `group_messages` | 3 | Different messages shown per group |
@@ -67,8 +68,8 @@ The endpoint has no generation options ("generation controls are not supported")
 | `retries` | 2 | Repetitions of a failed request, and of an answer that is not valid (with another seed) |
 | `keep_alive` | `10m` | How long Ollama keeps the model loaded between requests |
 | `think` | `true` | Reasoning before the answer: `true`, `false` or a level of the model, e.g. `"low"`, `"medium"`, `"high"` for gpt-oss (the values `/api/show` lists under `thinking.values`). A model that cannot switch reasoning off uses its lowest level for `false`; an unknown level gives the model's default |
-| `temperature`, `top_p`, `top_k`, `seed` | 0.6, 0.95, 20, 42 | Generation options |
-| `min_p` | not set | Minimum probability of a token; not set: not sent, the model's default applies |
+| `temperature`, `top_p`, `seed` | 0.6, 0.95, 42 | Generation options; set them to what the model's publisher recommends (e.g. 1.0 and 1.0 for gpt-oss) |
+| `top_k`, `min_p` | not set | Only the k most likely tokens / tokens above this probability relative to the most likely one; not set: not sent, Ollama's or the model's default applies (useful when the publisher recommends no value) |
 | `num_ctx`, `num_predict` | 16384, 6144 | Context window and the maximum number of tokens to generate (`num_predict` must be smaller) |
 | `entries_per_request` | 10 | Report entries written per request |
 | `chars_per_token` | 2.5 | Estimate the tool uses to fit entries into `num_ctx − num_predict`; lower is safer |
@@ -205,7 +206,7 @@ The decisions of the earlier evaluation are reused and only the reports are writ
 | `step6-llm-evaluation/summary.json` | Models (name, digest), the threat model (source, confirmation, SHA-256, characters, shortened or not), the settings of `[llm]`, per area: status (`ok`, `partial`, `failed`, `skipped`), items, duplicates, requests, durations, tokens, labels, low-confidence decisions, notes |
 | `step6-llm-evaluation/<area>/items.json` | The prepared items: ids, facts, duplicates, code context; for code quality groups every location |
 | `step6-llm-evaluation/<area>/decisions.json` | Per item: label, probabilities, confidence, review flag, who decided (model, default, tool); duplicates with `duplicate_of` |
-| `step6-llm-evaluation/<area>/decisions_info.json` | The evaluation that made the decisions: start, decision model (name, digest), settings, statistics; used by `--resume` |
+| `step6-llm-evaluation/<area>/decisions_info.json` | The evaluation that made the decisions: start, decision model (name, digest), settings, statistics, the `[llm.input]` settings and (security) the threat model's source and SHA-256; used by `--resume`, and the record of a run stopped after the decisions |
 | `step6-llm-evaluation/<area>/report.json` | The area's report: structure by the tool, texts by the reasoning model |
 | `step6-llm-evaluation/<area>/requests/` | Every request and answer (`NNN-decision.json`, `NNN-report.json`), including the reasoning of the reasoning model |
 

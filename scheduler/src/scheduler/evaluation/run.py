@@ -262,7 +262,8 @@ def _evaluate(client: OllamaClient, config: LlmConfig, prepared: list[tuple[Area
         _write_json(step_dir / run.area / "decisions.json",
                     [{"id": item_id, **decision} for item_id, decision in labels.items()])
         write_decisions_info(step_dir / run.area, result.models["decision"], config.decision, started,
-                             run.decisions)
+                             run.decisions, inputs=asdict(config.input),
+                             threat_model=result.threat_model if run.area == "security" else None)
         out(f"    {AREA_NAMES[run.area]}: {_describe_labels(run.decisions)}")
     if not _unload(client, config.decision.model):
         result.errors.append(f"the decision model {config.decision.model} could not be unloaded; the reports were "

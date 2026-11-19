@@ -458,3 +458,17 @@ def test_resume_labels_security_again_when_the_threat_model_changed(tmp_path):
     assert "code quality: reused" in out and "test quality: reused" in out
     assert any("command line tool for its own developers" in body["state"]
                for endpoint, body in fake.requests if endpoint == "/v1/systemone")
+
+
+def test_decisions_info_names_what_the_model_saw(tmp_path):
+    run = make_run(tmp_path)
+    with_threat_model(run)
+    evaluate(run)
+    info = read(run / "step6-llm-evaluation" / "security" / "decisions_info.json")
+    from dataclasses import asdict
+
+    from scheduler.evaluation.config import load_config
+
+    assert info["input"] == asdict(load_config(REPOSITORY / "code-analysis.toml").input)  # the settings of the run
+    assert info["threat_model"]["sha256"] == "abc123def4567"
+    assert read(run / "step6-llm-evaluation" / "code_quality" / "decisions_info.json")["threat_model"] is None
